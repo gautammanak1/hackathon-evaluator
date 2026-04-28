@@ -1,10 +1,27 @@
 # Deploy: Render (API) + Vercel (UI)
 
-Single repo: backend ships on **Render**, frontend on **Vercel**. GitHub Actions runs **CI** on push/PR (`.github/workflows/ci.yml`).
+Single repo: backend ships on **Render**, frontend on **Vercel**. GitHub Actions runs **CI** on push/PR (`.github/workflows/ci.yml`), and **optionally** hits a Render deploy hook (`.github/workflows/render-deploy.yml`).
+
+**This project’s GitHub remote:** `https://github.com/gautammanak1/hackathon-evaluator` (own repo under `Desktop/github ana` — not your home-directory git).
+
+## Terminal quickstart
+
+```bash
+cd /path/to/hackathon-evaluator   # this repo root (contains render.yaml)
+
+# Render CLI (optional)
+render login          # one-time browser auth, if `render whoami` fails
+render blueprints validate
+
+# Reminder: OPENAI_API_KEY + API_CORS_ORIGINS go on Render, not in GitHub Actions
+./scripts/render-bootstrap.sh
+```
+
+**GitHub → Render deploy hook (optional):** Service → **Deploy** → **Deploy Hook** → copy URL → repo **Settings** → **Secrets and variables** → **Actions** → `RENDER_DEPLOY_HOOK_URL`.
 
 ## 1. Backend — Render
 
-1. Push this repo to GitHub.
+1. Repo is on GitHub: **gautammanak1/hackathon-evaluator**.
 2. In [Render](https://render.com) → **New** → **Blueprint** (or **Web Service**).
    - **Blueprint:** connect the repo; Render detects root `render.yaml`.
    - **Web Service (manual):**
