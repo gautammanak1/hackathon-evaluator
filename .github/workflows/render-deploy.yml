@@ -1,0 +1,46 @@
+# Optional: triggers a Render **deploy hook** after backend-related changes.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# Where secrets live (do NOT put API keys in render.yaml):
+#
+# | Secret / value            | Put it on…          | Purpose                          |
+# |---------------------------|---------------------|----------------------------------|
+# | OPENAI_API_KEY            | Render → Env        | LLM + embeddings at runtime      |
+# | API_CORS_ORIGINS          | Render → Env        | Allow your Vercel origin(s)      |
+# | OPENAI_MODEL (optional)   | Render → Env        | Overrides default in render.yaml |
+# | RENDER_DEPLOY_HOOK_URL    | GitHub → Repo       | This workflow POSTs to redeploy |
+# | secrets                   | Secrets             | Trigger only; not copied to     |
+#
+# GitHub Actions does **not** replace Render’s environment for the running API.
+# set `OPENAI_*` / `API_CORS_*` in the Render dashboard (or Blueprint first sync).
+#
+# Deploy hook: Render dashboard → your Web Service → **Deploy** → **Deploy Hook**
+# → copy URL → GitHub repo → **Settings** → **Secrets** → `RENDER_DEPLOY_HOOK_URL`
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: Trigger Render deploy
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - "requirements.txt"
+      - "pyproject.toml"
+      - "render.yaml"
+
+jobs:
+  render-hook:
+    runs-on: ubuntu-latest
+    steps:
+      - name: POST Render deploy hook
+        env:
+          HOOK: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -z "${HOOK:-}" ]; then
+            echo "RENDER_DEPLOY_HOOK_URL is not set — skipping (set Render deploy hook URL in GitHub repo secrets)."
+            exit 0
+          fi
+          curl -fsS -X POST "$HOOK"
+          echo "Render deploy triggered."

@@ -1,0 +1,32 @@
+# Render Blueprint: FastAPI backend (same repo as the Vercel frontend).
+# https://render.com/docs/blueprint-spec
+#
+# Environment for the **running service** is set on Render (Dashboard or first
+# Blueprint sync), not in GitHub Actions. See `render.yaml` envVars + DEPLOY.md.
+# GitHub secret `RENDER_DEPLOY_HOOK_URL` only triggers redeploys (render-deploy.yml).
+#
+# After deploy: set OPENAI_API_KEY + API_CORS_ORIGINS in the Render dashboard
+# (Dashboard → Web Service → Environment). CORS must include your Vercel URL, e.g.
+#   https://your-app.vercel.app
+
+services:
+  - type: web
+    name: hackathon-evaluator-api
+    runtime: python
+    region: oregon
+    # Use `starter` or higher for always-on; `free` sleeps when idle.
+    plan: free
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt && pip install -e .
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT --app-dir backend
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.8"
+      - key: API_CORS_ORIGINS
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-4o
+      - key: OPENAI_EMBEDDING_MODEL
+        value: text-embedding-3-small

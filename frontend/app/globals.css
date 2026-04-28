@@ -1,0 +1,15 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  @apply bg-gh-bg text-gray-100 font-sans antialiased min-h-screen;
+}
+
+.glow-ring {
+  box-shadow: 0 0 0 1px rgba(88, 166, 255, 0.25), 0 0 40px rgba(88, 166, 255, 0.08);
+}

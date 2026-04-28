@@ -1,0 +1,4 @@
+# LA Hacks sample batch (replace with real submissions)
+# https://github.com/org/project
+
+https://github.com/octocat/Hello-World
