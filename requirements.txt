@@ -12,6 +12,7 @@ faiss-cpu>=1.8.0
 langchain-text-splitters>=0.3.4
 typing_extensions>=4.12.0
 fastapi>=0.115.0
+python-multipart>=0.0.9
 uvicorn[standard]>=0.32.0
 httpx>=0.27.0
 PyGithub>=2.4.0
