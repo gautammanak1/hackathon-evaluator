@@ -2,6 +2,8 @@
 
 Production-style judge for hackathon submissions (Fetch.ai / uAgents / ASI:One patterns): **GitHub repos**, optional **PDFs**, and **free-form metadata** (team name, table, or any event-specific columns). The backend runs a **LangGraph** pipeline (clone and/or document text → heuristics → optional RAG → LLM) and returns structured JSON via **FastAPI** and **Next.js 14**.
 
+**Source:** [github.com/gautammanak1/hackathon-evaluator](https://github.com/gautammanak1/hackathon-evaluator)
+
 ## What it does
 
 - **Repository:** clone and scan source for uAgents, protocols, LLM usage.
