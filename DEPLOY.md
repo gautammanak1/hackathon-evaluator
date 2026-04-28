@@ -4,6 +4,8 @@ Single repo: backend ships on **Render**, frontend on **Vercel**. GitHub Actions
 
 **This project’s GitHub remote:** `https://github.com/gautammanak1/hackathon-evaluator` (own repo under `Desktop/github ana` — not your home-directory git).
 
+**Live URLs:** API **https://hackathon-evaluator-api.onrender.com** · UI **https://hackathon-evaluator-one.vercel.app** (set `NEXT_PUBLIC_API_URL` on Vercel to the API URL).
+
 ## Terminal quickstart
 
 ```bash
