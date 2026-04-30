@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import time
+from datetime import datetime, timezone
+from typing import Any
+
 from langgraph.graph import END, StateGraph
 
 from hackathon_eval.graph_nodes import (
@@ -23,6 +27,42 @@ from hackathon_eval.graph_nodes import (
     node_report_generator,
 )
 from hackathon_eval.state import EvalState
+
+
+def invoke_graph_timed(payload: EvalState) -> tuple[dict[str, Any], list[dict[str, Any]], str | None]:
+    """Run compiled graph with stream timing for each node; returns (report dict, steps, work_dir)."""
+    graph = build_evaluation_graph()
+    steps: list[dict[str, Any]] = []
+    t_prev = time.perf_counter()
+    report: dict[str, Any] | None = None
+    work_dir: str | None = None
+    for event in graph.stream(payload):
+        now = time.perf_counter()
+        dur_ms = max(0, int((now - t_prev) * 1000))
+        t_prev = now
+        if not isinstance(event, dict):
+            continue
+        for node_name, partial in event.items():
+            ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            steps.append(
+                {
+                    "step_id": len(steps) + 1,
+                    "name": node_name,
+                    "status": "complete",
+                    "duration_ms": dur_ms,
+                    "timestamp": ts,
+                }
+            )
+            if isinstance(partial, dict):
+                if partial.get("report") is not None:
+                    report = partial["report"]
+                if "work_dir" in partial:
+                    work_dir = partial.get("work_dir") or None
+    if report is None:
+        final = graph.invoke(payload)
+        report = final.get("report") or {}
+        work_dir = final.get("work_dir") or work_dir
+    return report or {}, steps, work_dir
 
 
 def build_evaluation_graph():

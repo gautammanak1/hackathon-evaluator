@@ -26,3 +26,6 @@ eval-output*.json
 
 data/innovation-labs-docs/
 data/innovation-lab-agents/
+
+# Local eval persistence (SQLite)
+backend/data/*.db

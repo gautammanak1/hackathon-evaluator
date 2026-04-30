@@ -12,10 +12,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, model_validator
 
 from hackathon_eval.batch_file_parse import BatchEvaluateItem, parse_batch_upload
+from hackathon_eval.canonical_report import build_canonical_payload
 from hackathon_eval.config import API_CORS_ORIGINS
-from hackathon_eval.graph import build_evaluation_graph
+from hackathon_eval.graph import invoke_graph_timed
 from hackathon_eval.pdf_extract import extract_pdf_text
 from hackathon_eval.pdf_urls import find_github_repo_urls
+from hackathon_eval.persistence import delete_evaluation as db_delete_evaluation
+from hackathon_eval.persistence import list_evaluations as db_list_evaluations
+from hackathon_eval.persistence import load_evaluation as db_load_evaluation
+from hackathon_eval.persistence import save_evaluation
 from hackathon_eval.tools.repo_tools import remove_path
 
 load_dotenv()
@@ -59,6 +64,7 @@ class BatchEvaluateRequest(BaseModel):
 
 class EvaluateResponse(BaseModel):
     evaluation: dict[str, Any]
+    submission_id: str
 
 
 class BatchEvaluateResponse(BaseModel):
@@ -74,6 +80,8 @@ class SubmissionEvaluateResponse(BaseModel):
     results: list[dict[str, Any]] | None = None
     count: int = 1
     notice: str | None = None
+    submission_id: str | None = None
+    submission_ids: list[str] | None = None
 
 
 def _github_ok(url: str) -> bool:
@@ -81,12 +89,57 @@ def _github_ok(url: str) -> bool:
     return "github.com" in u or u.startswith("git@")
 
 
-def _invoke_clean(graph, payload: dict[str, Any]) -> dict[str, Any]:
-    state = graph.invoke(payload)
-    report = state.get("report") or {}
-    if not os.getenv("EVAL_PERSIST_CLONE") and state.get("work_dir"):
-        remove_path(Path(state["work_dir"]))
-    return report
+def _resolve_source_url(payload: dict[str, Any]) -> str:
+    return ((payload.get("repo_url") or "") if isinstance(payload, dict) else "") or ""
+
+
+def _submission_type(payload: dict[str, Any]) -> str:
+    doc = (payload.get("document_text") or "").strip()
+    url = (payload.get("repo_url") or "").strip()
+    if url and doc:
+        return "github_with_document"
+    if doc:
+        return "pdf"
+    return "github"
+
+
+def _persist_and_merge(
+    report: dict[str, Any],
+    *,
+    steps: list[dict[str, Any]],
+    submission_metadata: dict[str, Any] | None,
+    source_url: str,
+    submission_type: str,
+) -> tuple[dict[str, Any], str]:
+    total_ms = sum(int(s.get("duration_ms") or 0) for s in steps)
+    canon = build_canonical_payload(
+        repo_report=report,
+        evaluation_steps=steps,
+        submission_metadata=submission_metadata,
+        source_url=source_url or "",
+        submission_type=submission_type,
+        total_evaluation_time_ms=total_ms if total_ms else None,
+    )
+    merged_body = {**report, **canon}
+    submission_id = save_evaluation(merged_body)
+    merged = {**merged_body, "submission_id": submission_id}
+    return merged, submission_id
+
+
+def _evaluate_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    """Run LangGraph with timings, persist, cleanup clone directory."""
+    report, steps, work_dir = invoke_graph_timed(payload)
+    meta = payload.get("submission_metadata") if isinstance(payload.get("submission_metadata"), dict) else None
+    merged, sid = _persist_and_merge(
+        report,
+        steps=steps,
+        submission_metadata=meta,
+        source_url=_resolve_source_url(payload),
+        submission_type=_submission_type(payload),
+    )
+    if not os.getenv("EVAL_PERSIST_CLONE") and work_dir:
+        remove_path(Path(work_dir))
+    return merged, sid
 
 
 def _build_payload(
@@ -113,8 +166,9 @@ def _build_payload(
     return payload
 
 
-def _run_batch(graph, items: list[BatchEvaluateItem]) -> list[dict[str, Any]]:
+def _run_batch(items: list[BatchEvaluateItem]) -> tuple[list[dict[str, Any]], list[str]]:
     results: list[dict[str, Any]] = []
+    ids: list[str] = []
     for item in items:
         url = (item.repo_url or "").strip()
         doc = (item.document_text or "").strip()
@@ -133,28 +187,40 @@ def _run_batch(graph, items: list[BatchEvaluateItem]) -> list[dict[str, Any]]:
             document_text=item.document_text,
             submission_metadata=item.submission_metadata,
         )
-        state: dict[str, Any] | None = None
         try:
-            state = graph.invoke(payload)
-            report = state.get("report") or {}
+            merged, sid = _evaluate_payload(payload)
             if item.label is not None:
-                report = {**report, "batch_label": item.label}
-            results.append(report)
+                merged = {**merged, "batch_label": item.label}
+            results.append(merged)
+            ids.append(sid)
         except Exception as e:
             results.append({"error": str(e), "repo_url": url or None, "label": item.label})
-        finally:
-            if (
-                not os.getenv("EVAL_PERSIST_CLONE")
-                and state
-                and state.get("work_dir")
-            ):
-                remove_path(Path(state["work_dir"]))
-    return results
+    return results, ids
 
 
 @app.get("/health")
 def health():
     return {"ok": True}
+
+
+@app.get("/evaluation/{evaluation_id}")
+def get_evaluation(evaluation_id: str):
+    row = db_load_evaluation(evaluation_id.strip())
+    if row is None:
+        raise HTTPException(status_code=404, detail="Evaluation not found")
+    return row
+
+
+@app.delete("/evaluation/{evaluation_id}")
+def delete_evaluation_endpoint(evaluation_id: str):
+    if not db_delete_evaluation(evaluation_id.strip()):
+        raise HTTPException(status_code=404, detail="Evaluation not found")
+    return {"ok": True, "id": evaluation_id.strip()}
+
+
+@app.get("/evaluations")
+def list_evaluations_endpoint(limit: int = 50, offset: int = 0):
+    return {"items": db_list_evaluations(limit=limit, offset=offset)}
 
 
 _MAX_BATCH_JSON = 40
@@ -168,7 +234,6 @@ def evaluate(req: EvaluateRequest):
     if url and not _github_ok(url):
         raise HTTPException(status_code=400, detail="repo_url must be a GitHub repository")
     try:
-        graph = build_evaluation_graph()
         payload = _build_payload(
             repo_url=req.repo_url,
             branch=req.branch,
@@ -176,8 +241,8 @@ def evaluate(req: EvaluateRequest):
             document_text=req.document_text,
             submission_metadata=req.submission_metadata,
         )
-        report = _invoke_clean(graph, payload)
-        return EvaluateResponse(evaluation=report)
+        merged, sid = _evaluate_payload(payload)
+        return EvaluateResponse(evaluation=merged, submission_id=sid)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
@@ -209,9 +274,6 @@ async def evaluate_submission(
     pdf_single_repo = False
     effective_repo = form_repo
 
-    # PDF from Google Sheets: many github.com cells → one evaluation per repo.
-    # Batch whenever the PDF text exposes 2+ repo links, even if the user also filled the URL field
-    # (otherwise only one row runs and the rest of the sheet is ignored).
     found = find_github_repo_urls(doc_text) if doc_text else []
     if doc_text and len(found) >= 2:
         notice_parts: list[str] = []
@@ -225,7 +287,6 @@ async def evaluate_submission(
                 "The PDF lists multiple repositories; evaluating all detected links. The GitHub URL field was ignored."
             )
         notice = " ".join(notice_parts) if notice_parts else None
-        graph = build_evaluation_graph()
         items = [
             BatchEvaluateItem(
                 repo_url=u,
@@ -234,20 +295,20 @@ async def evaluate_submission(
             )
             for i, u in enumerate(found)
         ]
-        results = _run_batch(graph, items)
+        results, ids = _run_batch(items)
         return SubmissionEvaluateResponse(
             mode="batch",
             evaluation=None,
             results=results,
             count=len(results),
             notice=notice,
+            submission_ids=ids,
         )
     if doc_text and not form_repo and len(found) == 1:
         effective_repo = found[0]
         pdf_single_repo = True
 
     try:
-        graph = build_evaluation_graph()
         if effective_repo and doc_text:
             if form_repo:
                 payload = _build_payload(
@@ -273,13 +334,14 @@ async def evaluate_submission(
                 document_text=doc_text or None,
                 submission_metadata=None,
             )
-        report = _invoke_clean(graph, payload)
+        merged, sid = _evaluate_payload(payload)
         return SubmissionEvaluateResponse(
             mode="single",
-            evaluation=report,
+            evaluation=merged,
             results=None,
             count=1,
             notice=notice,
+            submission_id=sid,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -294,8 +356,8 @@ def evaluate_batch(req: BatchEvaluateRequest):
             status_code=400,
             detail=f"At most {_MAX_BATCH_JSON} items in JSON batch",
         )
-    graph = build_evaluation_graph()
-    return BatchEvaluateResponse(results=_run_batch(graph, req.items), count=len(req.items))
+    results, _ids = _run_batch(req.items)
+    return BatchEvaluateResponse(results=results, count=len(req.items))
 
 
 @app.post("/evaluate/batch/upload", response_model=BatchEvaluateResponse)
@@ -319,8 +381,8 @@ async def evaluate_batch_upload(file: UploadFile = File(...)):
             status_code=400,
             detail=f"At most {_MAX_BATCH_FILE} rows per file",
         )
-    graph = build_evaluation_graph()
-    return BatchEvaluateResponse(results=_run_batch(graph, items), count=len(items))
+    results, _ids = _run_batch(items)
+    return BatchEvaluateResponse(results=results, count=len(items))
 
 
 if __name__ == "__main__":
