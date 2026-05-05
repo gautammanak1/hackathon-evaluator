@@ -9,12 +9,80 @@ import os
 import re
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 logger = logging.getLogger(__name__)
 
 _mcp_app: FastMCP | None = None
+
+
+def _split_csv_env(name: str) -> list[str]:
+    raw = os.getenv(name) or ""
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def _build_transport_security() -> TransportSecuritySettings:
+    """Configure DNS-rebinding protection so MCP works behind Render / Cloudflare.
+
+    Behind a TLS-terminating proxy, the Host header that ``mcp.server.sse``
+    inspects is the public hostname (e.g. ``hackathon-evaluator-api.onrender.com``)
+    while ``Origin`` is whatever client connected (browser, uagent, curl, etc.).
+    The library defaults to an empty allowlist, which fails *every* request.
+
+    Resolution order:
+
+    1. ``MCP_ALLOW_ANY_HOST=1`` — disables protection entirely (use only when
+       running behind a trusted proxy; cheapest workable default for self-hosted).
+    2. ``MCP_ALLOWED_HOSTS`` / ``MCP_ALLOWED_ORIGINS`` (comma-separated) — explicit
+       allowlists, in addition to whatever we derive automatically.
+    3. Auto-derive from ``MCP_PUBLIC_BASE_URL`` (host + scheme://host origin),
+       always plus the standard localhost dev hosts.
+    """
+    if os.getenv("MCP_ALLOW_ANY_HOST", "").strip().lower() in {"1", "true", "yes"}:
+        return TransportSecuritySettings(enable_dns_rebinding_protection=False)
+
+    hosts: list[str] = []
+    origins: list[str] = []
+
+    public = (os.getenv("MCP_PUBLIC_BASE_URL") or "").strip().rstrip("/")
+    if public:
+        try:
+            parts = urlsplit(public)
+            if parts.hostname:
+                host_with_port = parts.netloc  # includes :port if non-default
+                hosts.extend({parts.hostname, host_with_port})
+                if parts.scheme:
+                    origins.append(f"{parts.scheme}://{parts.netloc}")
+        except ValueError:  # pragma: no cover — malformed URL is a user error
+            logger.warning("MCP_PUBLIC_BASE_URL is not a valid URL: %s", public)
+
+    hosts.extend(["localhost", "127.0.0.1", "0.0.0.0"])
+    hosts.extend(f"localhost:{port}" for port in (8000, 8001, 8010, 3000))
+    hosts.extend(f"127.0.0.1:{port}" for port in (8000, 8001, 8010, 3000))
+    origins.extend(
+        [
+            "http://localhost",
+            "http://localhost:3000",
+            "http://localhost:8000",
+            "http://localhost:8010",
+            "http://127.0.0.1",
+            "http://127.0.0.1:3000",
+            "http://127.0.0.1:8000",
+            "http://127.0.0.1:8010",
+        ]
+    )
+
+    hosts.extend(_split_csv_env("MCP_ALLOWED_HOSTS"))
+    origins.extend(_split_csv_env("MCP_ALLOWED_ORIGINS"))
+
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=sorted({h for h in hosts if h}),
+        allowed_origins=sorted({o for o in origins if o}),
+    )
 
 
 def _evaluation_json_for_mcp_client(
@@ -146,6 +214,7 @@ def _get_mcp() -> FastMCP:
                 "backend/ai/prompts/static, fetch the assembled judge system prompt, optionally "
                 "run a GitHub repo through the LangGraph evaluation pipeline."
             ),
+            transport_security=_build_transport_security(),
         )
 
         @_mcp_app.tool()

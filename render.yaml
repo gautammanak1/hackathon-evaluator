@@ -49,6 +49,14 @@ services:
         value: /mcp
       - key: MCP_PUBLIC_BASE_URL
         sync: false
+      # Set MCP_ALLOW_ANY_HOST=1 to fully disable DNS-rebinding protection.
+      # Otherwise MCP_PUBLIC_BASE_URL is auto-allowed; add extras here if needed.
+      - key: MCP_ALLOW_ANY_HOST
+        value: "1"
+      - key: MCP_ALLOWED_HOSTS
+        sync: false
+      - key: MCP_ALLOWED_ORIGINS
+        sync: false
       # --- Persistence + GitHub fallback ---
       - key: GITHUB_TOKEN
         sync: false
