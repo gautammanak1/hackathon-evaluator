@@ -4,12 +4,12 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const LABELS: Record<string, string> = {
-  evaluate: "Evaluate",
-  results: "Results",
-  leaderboard: "Leaderboard",
-  bulk: "Leaderboard",
-  docs: "Help",
+  evaluate: "Analyse",
+  results: "Result",
+  analysis: "Analysis",
   settings: "Settings",
+  admin: "Admin",
+  github: "GitHub",
 };
 
 export function Breadcrumbs() {
@@ -26,11 +26,14 @@ export function Breadcrumbs() {
   }
 
   return (
-    <nav aria-label="Breadcrumb" className="no-print border-b border-gh-border bg-gh-card px-4 py-2 text-xs text-gh-muted dark:bg-[#141414]">
+    <nav
+      aria-label="Breadcrumb"
+      className="no-print border-b border-gh-border bg-gh-card/40 px-4 py-2 text-xs text-gh-muted backdrop-blur-sm"
+    >
       <ol className="flex flex-wrap items-center gap-1">
         <li>
-          <Link href="/" className="hover:underline">
-            Dashboard
+          <Link href="/evaluate" className="hover:text-gh-text">
+            Home
           </Link>
         </li>
         {crumbs.map((c) => (
@@ -41,7 +44,7 @@ export function Breadcrumbs() {
             {c.href === pathname ? (
               <span className="font-medium text-gh-text">{c.label}</span>
             ) : (
-              <Link href={c.href} className="hover:underline">
+              <Link href={c.href} className="hover:text-gh-text">
                 {c.label}
               </Link>
             )}

@@ -9,15 +9,20 @@ import { ArrowLeft, Copy, Download } from "lucide-react";
 import toast from "react-hot-toast";
 import { fetchEvaluationById } from "@/lib/api";
 import type { EvaluationResult } from "@/lib/api";
-import { EvaluationFlowDiagrams } from "@/components/evaluation/EvaluationFlowDiagrams";
+import {
+  coerceIssueStrings,
+  mergeSuggestionsForDisplay,
+  resolveStrengthRows,
+  type StrengthRow,
+} from "@/lib/reportDisplay";
 import { JudgeReportOverview } from "@/components/evaluation/JudgeReportOverview";
 import { RepoAnalysisTerminal } from "@/components/evaluation/RepoAnalysisTerminal";
 import { JsonReportViewer } from "@/components/evaluation/JsonReportViewer";
-import { EvaluationTimeline, PIPELINE_STEPS, PipelineFlowStrip } from "@/components/evaluation/EvaluationTimeline";
 import { PrintProtocolChecklist } from "@/components/evaluation/PrintProtocolChecklist";
-import { TerminalChrome } from "@/components/evaluation/TerminalChrome";
+import { IssuePanel } from "@/components/analysis/IssuePanel";
+import { MermaidDiagram } from "@/components/analysis/MermaidDiagram";
+import { SuggestionAccordion } from "@/components/analysis/SuggestionAccordion";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
@@ -78,10 +83,10 @@ export default function ResultByIdPage() {
 
   if (error || !single) {
     return (
-      <div className="mx-auto max-w-lg rounded-none border border-gh-border bg-gh-card p-10 text-center">
+      <div className="mx-auto max-w-lg rounded-xl border border-gh-border bg-gh-card p-10 text-center">
         <p className="font-mono text-sm text-gh-text">Evaluation not found or API unreachable.</p>
-        <Button asChild className="mt-4 border-gh-text bg-gh-text text-gh-bg dark:border-white dark:bg-white dark:text-black" variant="default">
-          <Link href="/">← Dashboard</Link>
+        <Button asChild className="mt-4" variant="default">
+          <Link href="/evaluate">Run another analysis</Link>
         </Button>
       </div>
     );
@@ -92,21 +97,45 @@ export default function ResultByIdPage() {
     ? ["idea", "implementation", "protocol_integration", "ai_integration", "presentation"].filter((k) => k in pillarScores)
     : [];
 
-  const steps =
-    (single.evaluation_steps as Array<{ name?: string; node_key?: string; duration_ms?: number }> | undefined) || [];
-  const activeTimeline =
-    steps.length > 0 ? Math.min(steps.length - 1, PIPELINE_STEPS.length - 1) : PIPELINE_STEPS.length - 1;
-
   const scoreNum = scoreOf(single);
+  const issueUrl =
+    single.github_issue_url ||
+    single.report_v2?.github_issue_url ||
+    single.github_issue?.issue_url ||
+    null;
+  const issueStrings = coerceIssueStrings(single.report_v2?.issues ?? single.issues ?? []);
+  const strengthRows: StrengthRow[] = resolveStrengthRows(single);
+  const { items: suggestionItems, isDerived: suggestionsDerived } = mergeSuggestionsForDisplay(single, issueStrings);
+  const diagrams = single.report_v2?.diagrams || (single as { diagrams?: { workflow?: string; sequence?: string; source?: string } }).diagrams || {};
+  const workflowMermaid = diagrams.workflow || "";
+  const sequenceMermaid = diagrams.sequence || "";
+  const diagramSource = diagrams.source || "";
+
+  const summaryText = single.report_v2?.summary || single.summary || "";
+  const notesText = single.report_v2?.notes || single.notes || "";
 
   return (
     <div className="relative mx-auto max-w-7xl space-y-8 print:max-w-none">
       <div className="no-print">
-        <Link href="/" className="inline-flex items-center gap-2 font-mono text-sm text-gh-blue underline dark:text-sky-400">
+        <Link href="/evaluate" className="inline-flex items-center gap-2 font-mono text-sm text-gh-text/80 hover:text-gh-text">
           <ArrowLeft className="h-4 w-4" aria-hidden />
-          Dashboard
+          Run another analysis
         </Link>
       </div>
+
+      {issueUrl && (
+        <div className="no-print rounded-xl border border-fetchai-purple/40 bg-fetchai-purple/10 p-4 text-sm text-gh-text">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="font-semibold">GitHub issue created</p>
+              <p className="font-mono text-xs text-gh-muted">{issueUrl}</p>
+            </div>
+            <Button asChild size="sm" className="bg-[#5F38FB] text-white hover:bg-[#7A58FF]">
+              <a href={issueUrl} target="_blank" rel="noreferrer">View on GitHub</a>
+            </Button>
+          </div>
+        </div>
+      )}
 
       <header className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
@@ -142,13 +171,144 @@ export default function ResultByIdPage() {
             {single.report_v2?.problem_solved || single.problem_solved || single.analysis?.idea?.problem_statement || "—"}
           </p>
           <p className="mb-2 mt-4 font-mono text-[10px] font-semibold uppercase tracking-wider text-gh-muted">Solution overview</p>
-          <p className="text-sm leading-relaxed text-gh-muted">
+          <p className="text-sm leading-relaxed text-gh-text">
             {single.report_v2?.solution_overview || single.solution_overview || "—"}
           </p>
         </div>
       </motion.section>
 
-      <EvaluationFlowDiagrams ev={single} />
+      <motion.section
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.35 }}
+        className="space-y-3"
+      >
+        <div className="flex items-baseline justify-between">
+          <h2 className="text-lg font-bold text-gh-text">Detailed summary</h2>
+          {notesText ? (
+            <p className="font-mono text-[10px] uppercase tracking-wider text-gh-muted">
+              Strict reviewer narrative
+            </p>
+          ) : null}
+        </div>
+        <div className="rounded-xl border border-gh-border bg-white p-5">
+          {summaryText ? (
+            <div className="space-y-4 text-[15px] leading-7 text-gh-text">
+              {summaryText
+                .split(/\n{2,}/)
+                .map((p) => p.trim())
+                .filter((p) => p.length > 0)
+                .map((para, i) => {
+                  // Render Markdown bold headers as h3, e.g. **Problem this project solves**.
+                  const headerOnly = para.match(/^\*\*(.+?)\*\*\s*$/);
+                  if (headerOnly) {
+                    return (
+                      <h3
+                        key={i}
+                        className="mt-2 text-base font-semibold text-[#000D3E]"
+                      >
+                        {headerOnly[1].trim()}
+                      </h3>
+                    );
+                  }
+                  // Header followed inline by body on the next line(s).
+                  const headerLed = para.match(/^\*\*(.+?)\*\*\s*\n([\s\S]+)$/);
+                  if (headerLed) {
+                    return (
+                      <div key={i} className="space-y-1.5">
+                        <h3 className="text-base font-semibold text-[#000D3E]">
+                          {headerLed[1].trim()}
+                        </h3>
+                        <p className="leading-7">{headerLed[2].trim()}</p>
+                      </div>
+                    );
+                  }
+                  return <p key={i}>{para}</p>;
+                })}
+            </div>
+          ) : (
+            <p className="text-sm text-gh-muted">No summary returned by the judge.</p>
+          )}
+          {notesText ? (
+            <div className="mt-5 border-t border-gh-border pt-4">
+              <p className="mb-1 font-mono text-[10px] uppercase tracking-wider text-gh-muted">
+                Reviewer notes
+              </p>
+              <p className="text-sm leading-7 text-gh-text">{notesText}</p>
+            </div>
+          ) : null}
+        </div>
+      </motion.section>
+
+      {(workflowMermaid || sequenceMermaid) && (
+        <motion.section
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.35 }}
+          className="space-y-3"
+        >
+          <div className="flex items-baseline justify-between">
+            <h2 className="text-lg font-bold text-gh-text">Architecture diagrams</h2>
+            {diagramSource ? (
+              <p className="font-mono text-[10px] uppercase tracking-wider text-gh-muted">
+                Source: {diagramSource === "llm" ? "LLM-grounded" : "deterministic fallback"}
+              </p>
+            ) : null}
+          </div>
+          <div className="grid gap-4 lg:grid-cols-2">
+            {workflowMermaid ? (
+              <MermaidDiagram source={workflowMermaid} caption="Workflow — control & data flow" />
+            ) : null}
+            {sequenceMermaid ? (
+              <MermaidDiagram source={sequenceMermaid} caption="Sequence — representative interaction" />
+            ) : null}
+          </div>
+        </motion.section>
+      )}
+
+      <section className="space-y-3">
+        <h2 className="text-lg font-bold text-gh-text">Strict reviewer findings</h2>
+        <IssuePanel issues={issueStrings} />
+      </section>
+
+      <section className="space-y-3">
+        <h2 className="text-lg font-bold text-gh-text">Strengths (evidence-based)</h2>
+        <div className="rounded-xl border border-gh-border bg-gh-card p-4">
+          {strengthRows.length > 0 ? (
+            <ul className="space-y-3 text-sm text-gh-text">
+              {strengthRows.map((s, idx: number) => (
+                <li key={idx} className="leading-relaxed">
+                  <span className="font-semibold text-gh-text">{s.title}</span>
+                  {s.evidence ? (
+                    <p className="mt-1 whitespace-pre-wrap text-gh-text/95">{s.evidence}</p>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-sm text-gh-muted">No evidence-backed strengths recorded.</p>
+          )}
+        </div>
+      </section>
+
+      <section className="space-y-3">
+        <div className="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between">
+          <h2 className="text-lg font-bold text-gh-text">Complete fix snippets</h2>
+          {suggestionsDerived ? (
+            <p className="font-mono text-[10px] uppercase tracking-wider text-gh-muted">
+              Focus cards from findings · full snippets need eval_profile full
+            </p>
+          ) : null}
+        </div>
+        {suggestionsDerived ? (
+          <p className="text-xs leading-relaxed text-gh-muted">
+            Generated suggestion blocks were not stored for this run (common with <strong>fast</strong> evaluation).
+            Below are actionable priorities mapped from strict-review issues. Re-run with{" "}
+            <span className="font-mono text-gh-text">eval_profile: &quot;full&quot;</span> for full code diffs.
+          </p>
+        ) : null}
+        <SuggestionAccordion suggestions={suggestionItems} />
+      </section>
 
       <section className="space-y-2 no-print">
         <h2 className="text-lg font-bold text-gh-text">Repository narrative</h2>
@@ -191,46 +351,8 @@ export default function ResultByIdPage() {
 
       <PrintProtocolChecklist ev={single} />
 
-      <Card className="rounded-xl border-gh-border bg-gh-card dark:border-neutral-600 dark:bg-[#141414]">
-        <CardHeader>
-          <CardTitle className="text-base text-gh-text">Evaluation steps</CardTitle>
-          <CardDescription className="font-mono text-xs text-gh-muted">Recorded server-side timings when available.</CardDescription>
-        </CardHeader>
-        <CardContent className="p-2 sm:p-3">
-          <TerminalChrome title="server_timings.log">
-            {steps.length > 0 ? (
-              <>
-                <ol className="space-y-2 font-mono text-[11px] text-gh-text sm:text-xs dark:text-emerald-200/95">
-                  {steps.map((s, i) => (
-                    <li key={i} className="flex justify-between border-b border-gh-border/60 py-1 dark:border-emerald-950/50">
-                      <span>
-                        <span className="mr-2 text-gh-muted dark:text-emerald-800">[{String(i + 1).padStart(2, "0")}]</span>
-                        {String(s.name ?? s.node_key ?? "step")}
-                      </span>
-                      <span className="text-gh-muted dark:text-emerald-700">{s.duration_ms != null ? `${s.duration_ms}ms` : ""}</span>
-                    </li>
-                  ))}
-                </ol>
-                <PipelineFlowStrip activeStep={activeTimeline} embedded loading={false} />
-              </>
-            ) : (
-              <>
-                <EvaluationTimeline activeStep={activeTimeline} loading={false} />
-                <PipelineFlowStrip activeStep={activeTimeline} embedded loading={false} />
-              </>
-            )}
-          </TerminalChrome>
-        </CardContent>
-      </Card>
-
-      <Tabs defaultValue="overview" className="w-full">
+      <Tabs defaultValue="raw" className="w-full">
         <TabsList className="flex w-full flex-wrap justify-start gap-1 rounded-none border-b border-gh-border bg-transparent p-0">
-          <TabsTrigger
-            value="overview"
-            className="rounded-none border-b-2 border-transparent text-gh-muted data-[state=active]:border-gh-text data-[state=active]:text-gh-text"
-          >
-            Overview
-          </TabsTrigger>
           <TabsTrigger
             value="raw"
             className="rounded-none border-b-2 border-transparent text-gh-muted data-[state=active]:border-gh-text data-[state=active]:text-gh-text"
@@ -238,24 +360,6 @@ export default function ResultByIdPage() {
             Raw report
           </TabsTrigger>
         </TabsList>
-        <TabsContent value="overview" className="space-y-4 pt-4">
-          <Card className="rounded-xl border-gh-border bg-gh-card dark:border-neutral-600 dark:bg-[#141414]">
-            <CardHeader>
-              <CardTitle className="text-base text-gh-text">Summary</CardTitle>
-            </CardHeader>
-            <CardContent className="font-mono text-sm leading-relaxed text-gh-muted">
-              {single.summary || single.report_v2?.summary || "—"}
-            </CardContent>
-          </Card>
-          <Card className="rounded-xl border-gh-border bg-gh-card dark:border-neutral-600 dark:bg-[#141414]">
-            <CardHeader>
-              <CardTitle className="text-base text-gh-text">Notes</CardTitle>
-            </CardHeader>
-            <CardContent className="font-mono text-sm leading-relaxed text-gh-muted">
-              {single.notes || single.report_v2?.notes || "—"}
-            </CardContent>
-          </Card>
-        </TabsContent>
         <TabsContent value="raw" className="pt-4">
           <JsonReportViewer data={single} />
         </TabsContent>

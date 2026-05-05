@@ -3,15 +3,12 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  BookOpen,
   ChevronLeft,
   ChevronRight,
   Github,
-  Home,
   LayoutDashboard,
   PlusCircle,
   Trash2,
-  Trophy,
 } from "lucide-react";
 import * as React from "react";
 import toast from "react-hot-toast";
@@ -23,9 +20,7 @@ import { Separator } from "@/components/ui/separator";
 import { loadRecent, removeRecentEntry, type RecentEntry } from "@/lib/stats-storage";
 
 const nav = [
-  { href: "/", label: "Home", icon: Home },
-  { href: "/evaluate", label: "New evaluation", icon: PlusCircle },
-  { href: "/leaderboard", label: "Leaderboard", icon: Trophy },
+  { href: "/evaluate", label: "New analysis", icon: PlusCircle },
   { href: "/results", label: "Latest result", icon: LayoutDashboard },
 ];
 
@@ -47,12 +42,11 @@ export function AppSidebar({ className }: { className?: string }) {
   return (
     <aside
       className={cn(
-        "no-print hidden h-full min-h-0 shrink-0 overflow-hidden border-r border-gh-border bg-gh-lightgray transition-[width] duration-200 md:flex md:flex-col dark:bg-[#141414]",
+        "no-print hidden h-full min-h-0 shrink-0 overflow-hidden border-r border-gh-border bg-white transition-[width] duration-200 md:flex md:flex-col",
         collapsed ? "w-[84px]" : "w-60",
         className,
       )}
     >
-      {/* Collapsed: GitHub mark + expand — expanded: title row + collapse */}
       <div
         className={cn(
           "flex shrink-0 border-b border-gh-border",
@@ -61,11 +55,11 @@ export function AppSidebar({ className }: { className?: string }) {
       >
         {collapsed ? (
           <>
-            <Github className="h-8 w-8 shrink-0 text-gh-text" aria-hidden />
+            <Github className="h-7 w-7 shrink-0 text-gh-text" aria-hidden />
             <Button
               variant="ghost"
               size="icon"
-              className="shrink-0 rounded-lg border border-transparent text-gh-text hover:border-gh-text hover:bg-gh-card dark:hover:bg-[#1f1f1f]"
+              className="shrink-0 rounded-lg border border-transparent text-gh-text hover:border-gh-border hover:bg-fetch-soft"
               onClick={() => setCollapsed(false)}
               aria-expanded={false}
               aria-label="Expand sidebar"
@@ -75,15 +69,15 @@ export function AppSidebar({ className }: { className?: string }) {
           </>
         ) : (
           <>
-            <Github className="h-7 w-7 shrink-0 text-gh-text" aria-hidden />
+            <Github className="h-6 w-6 shrink-0 text-gh-text" aria-hidden />
             <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-semibold text-gh-text">Hackathon Evaluator</p>
-              <p className="truncate font-mono text-[10px] text-gh-muted">Light / dark · sidebar</p>
+              <p className="truncate text-sm font-semibold text-gh-text">Fetch.ai Evaluator</p>
+              <p className="truncate font-mono text-[10px] text-gh-muted">Single-repo deep review</p>
             </div>
             <Button
               variant="ghost"
               size="icon"
-              className="ml-auto h-10 w-10 shrink-0 rounded-lg border border-transparent text-gh-text hover:border-gh-text hover:bg-gh-card dark:hover:bg-[#1f1f1f]"
+              className="ml-auto h-10 w-10 shrink-0 rounded-lg border border-transparent text-gh-text hover:border-gh-border hover:bg-fetch-soft"
               onClick={() => setCollapsed(true)}
               aria-expanded={true}
               aria-label="Collapse sidebar"
@@ -97,14 +91,16 @@ export function AppSidebar({ className }: { className?: string }) {
       <ScrollArea className={cn("flex-1 py-3", collapsed ? "px-1.5" : "px-2")}>
         <nav className="space-y-1.5" aria-label="Main">
           {nav.map(({ href, label, icon: Icon }) => {
-            const active = pathname === href || (href !== "/" && pathname.startsWith(href));
+            const active = pathname === href || pathname.startsWith(`${href}/`);
             return (
               <Link
                 key={href}
                 href={href}
                 className={cn(
                   "flex items-center rounded-lg text-sm transition-colors",
-                  active ? "bg-gh-text text-gh-bg dark:bg-white dark:text-black" : "text-gh-muted hover:bg-gh-card hover:text-gh-text dark:hover:bg-[#252525]",
+                  active
+                    ? "bg-fetch-soft text-gh-text shadow-[inset_2px_0_0_var(--fetchai-purple)]"
+                    : "text-gh-muted hover:bg-fetch-soft hover:text-[#5F38FB]",
                   collapsed
                     ? "mx-auto h-11 w-11 min-h-[44px] min-w-[44px] justify-center p-0"
                     : "gap-3 px-3 py-2",
@@ -123,17 +119,19 @@ export function AppSidebar({ className }: { className?: string }) {
 
         {!collapsed && (
           <>
-            <p className="mb-2 px-2 font-mono text-[10px] font-medium uppercase tracking-wider text-gh-muted">Recent</p>
+            <p className="mb-2 px-2 font-mono text-[10px] font-medium uppercase tracking-wider text-gh-muted">
+              Recent
+            </p>
             <ul className="space-y-1">
               {recent.length === 0 && <li className="px-2 font-mono text-xs text-gh-muted">No runs yet</li>}
               {recent.map((r) => (
                 <li key={r.id} className="group flex items-center gap-0.5">
                   <Link
                     href={r.submission_id ? `/results/${r.submission_id}` : "/results"}
-                    className="min-w-0 flex-1 flex-col rounded-md px-2 py-1.5 text-xs hover:bg-gh-card dark:hover:bg-[#252525]"
+                    className="min-w-0 flex-1 flex-col rounded-md px-2 py-1.5 text-xs hover:bg-fetch-soft"
                   >
                     <span className="truncate font-medium text-gh-text">{r.label}</span>
-                    <span className="font-mono text-[11px] tabular-nums text-zinc-600 dark:text-zinc-300">
+                    <span className="font-mono text-[11px] tabular-nums text-gh-muted">
                       {r.status === "error" ? (
                         "Error"
                       ) : typeof r.score === "number" ? (
@@ -147,7 +145,7 @@ export function AppSidebar({ className }: { className?: string }) {
                   </Link>
                   <button
                     type="button"
-                    className="shrink-0 rounded-md p-2 text-gh-muted opacity-0 transition-opacity hover:bg-gh-card hover:text-gh-red group-hover:opacity-100 dark:hover:bg-[#252525]"
+                    className="shrink-0 rounded-md p-2 text-gh-muted opacity-0 transition-opacity hover:bg-fetch-soft hover:text-gh-red group-hover:opacity-100"
                     title={r.submission_id ? "Delete evaluation" : "Remove from list"}
                     aria-label="Remove from recent"
                     onClick={async (e) => {
@@ -179,27 +177,15 @@ export function AppSidebar({ className }: { className?: string }) {
           target="_blank"
           rel="noopener noreferrer"
           className={cn(
-            "flex items-center rounded-lg text-sm text-gh-muted hover:bg-gh-card hover:text-gh-text dark:hover:bg-[#252525]",
+            "flex items-center rounded-lg text-sm text-gh-muted hover:bg-fetch-soft hover:text-[#5F38FB]",
             collapsed ? "mx-auto h-11 w-11 justify-center" : "gap-2 px-3 py-2",
           )}
-          title="GitHub repository"
-          aria-label="GitHub repository"
+          title="Source"
+          aria-label="Source"
         >
           <Github className="h-4 w-4 shrink-0" aria-hidden />
-          {!collapsed && "Repository"}
+          {!collapsed && "Source"}
         </a>
-        <Link
-          href="/docs"
-          className={cn(
-            "flex items-center rounded-lg text-sm text-gh-muted hover:bg-gh-card hover:text-gh-text dark:hover:bg-[#252525]",
-            collapsed ? "mx-auto h-11 w-11 justify-center" : "gap-2 px-3 py-2",
-          )}
-          title={collapsed ? "Documentation" : undefined}
-          aria-label="Documentation"
-        >
-          <BookOpen className="h-4 w-4 shrink-0" aria-hidden />
-          {!collapsed && "Documentation"}
-        </Link>
       </div>
     </aside>
   );

@@ -52,6 +52,12 @@ module.exports = {
           blue: "var(--gh-blue)",
           red: "var(--gh-red)",
         },
+        fetchai: {
+          purple: "var(--fetchai-purple)",
+          pink: "var(--fetchai-pink)",
+          orange: "var(--fetchai-orange)",
+          green: "var(--fetchai-green)",
+        },
       },
       borderRadius: {
         lg: "var(--radius)",

@@ -16,12 +16,19 @@ function Block({ prompt, children }: { prompt: string; children: React.ReactNode
 /** Judge-oriented narrative + structured signals (problem / solution / summary). Mirrors “full repo story” without embedding secrets. */
 export function RepoAnalysisTerminal({ ev }: { ev: EvaluationResult }) {
   const v2 = ev.report_v2;
-  const problem = ev.problem_solved ?? v2?.problem_solved ?? "";
-  const solution = ev.solution_overview ?? v2?.solution_overview ?? "";
+  const problem =
+    ev.problem_solved ??
+    v2?.problem_solved ??
+    ev.analysis?.idea?.problem_statement ??
+    "";
+  const solution =
+    ev.solution_overview ?? v2?.solution_overview ?? ev.analysis?.idea?.solution ?? "";
   const summary = ev.summary ?? v2?.summary ?? "";
   const tech = ev.tech_stack?.length ? ev.tech_stack : ev.report_legacy?.tech_stack ?? [];
-  const issues = (ev.issues ?? v2?.issues ?? []).length;
-  const steps = Array.isArray(ev.evaluation_steps) ? ev.evaluation_steps.length : 0;
+  const issueList = ev.issues ?? v2?.issues ?? [];
+  const issues = Array.isArray(issueList) ? issueList.length : 0;
+  const stepsRaw = ev.evaluation_steps ?? (ev as { evaluation_steps?: unknown }).evaluation_steps;
+  const steps = Array.isArray(stepsRaw) ? stepsRaw.length : 0;
 
   const agents =
     typeof ev.agents_detected === "number"
@@ -30,7 +37,14 @@ export function RepoAnalysisTerminal({ ev }: { ev: EvaluationResult }) {
         ? ev.report_legacy.agents_detected
         : 0;
 
-  const hasBody = problem || solution || summary || tech.length || issues > 0 || steps > 0;
+  const hasBody =
+    !!problem?.trim() ||
+    !!solution?.trim() ||
+    !!summary?.trim() ||
+    tech.length > 0 ||
+    issues > 0 ||
+    steps > 0 ||
+    !!v2?.classification;
 
   if (!hasBody) {
     return (
@@ -64,6 +78,15 @@ export function RepoAnalysisTerminal({ ev }: { ev: EvaluationResult }) {
 
         <Block prompt="$ stat —signals">
           <ul className="list-none space-y-0.5 font-mono text-[11px]">
+            {v2?.classification ? (
+              <li>
+                <span className="text-gh-muted dark:text-emerald-700">classification:</span>{" "}
+                <span className="text-gh-text dark:text-emerald-200">{v2.classification}</span>
+                {typeof v2.score === "number" ? (
+                  <span className="text-gh-muted"> · score {v2.score}/10</span>
+                ) : null}
+              </li>
+            ) : null}
             <li>
               <span className="text-gh-muted dark:text-emerald-700">pipeline_steps:</span>{" "}
               <span className={cn(steps > 0 ? "text-gh-text dark:text-emerald-300" : "")}>{steps || "—"}</span>

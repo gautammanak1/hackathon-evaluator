@@ -3,20 +3,17 @@ import { GeistMono } from "geist/font/mono";
 import { GeistSans } from "geist/font/sans";
 import "./globals.css";
 import { Providers } from "@/components/providers";
-import { ThemeProvider } from "@/components/theme-provider";
 
 export const metadata: Metadata = {
-  title: "Hackathon Evaluator · Submission Intelligence",
-  description: "Evaluate hackathon GitHub repos, PDFs, and spreadsheets with structured scoring and narratives.",
+  title: "Fetch.ai Hackathon Evaluator",
+  description: "Sign in with GitHub to deeply analyse your Fetch.ai project and auto-create a remediation issue.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={`${GeistSans.variable} ${GeistMono.variable} min-h-screen font-sans transition-colors duration-200 antialiased`}>
-        <ThemeProvider>
-          <Providers>{children}</Providers>
-        </ThemeProvider>
+      <body className={`${GeistSans.variable} ${GeistMono.variable} min-h-screen bg-white font-mono text-[#000D3E] antialiased`}>
+        <Providers>{children}</Providers>
       </body>
     </html>
   );

@@ -6,7 +6,7 @@ Maps https://innovationlab.fetch.ai/resources/docs/<relpath-without-md> -> relat
 
 Usage:
   python backend/scripts/build_doc_url_manifest.py /path/to/innovation-labs/docs \\
-    --out backend/prompts/doc_url_manifest.json
+    --out backend/ai/prompts/doc_url_manifest.json
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from hackathon_eval.doc_catalog import DEFAULT_DOC_BASE, rel_path_to_canonical_u
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("docs_root", type=Path, help="Path to innovation-labs/docs")
-    p.add_argument("--out", type=Path, default=Path("backend/prompts/doc_url_manifest.json"))
+    p.add_argument("--out", type=Path, default=Path("backend/ai/prompts/doc_url_manifest.json"))
     p.add_argument("--base", default=DEFAULT_DOC_BASE)
     args = p.parse_args()
 

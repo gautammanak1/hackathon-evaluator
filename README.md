@@ -112,6 +112,28 @@ cd frontend && cp .env.example .env.local && npm install && npm run dev
 
 Set `NEXT_PUBLIC_API_URL` to the API. The UI: one GitHub URL and/or PDF, or a **CSV / Excel** bulk upload with a URL column and any extra columns you need.
 
+## uAgent façade (Agent Chat Protocol + REST)
+
+Runs a **`uagents` 0.22.x `Agent`** in-process that registers **Agent Chat Protocol** handlers and **`@agent.on_rest_post`** routes (`POST /evaluate/start`, `POST /evaluate/poll`, `GET /health`), both delegating to the same **`evaluate_and_persist`** path as FastAPI (`backend/hackathon_eval/evaluation_runner.py`). Jobs are stored in-memory (single-instance MVP).
+
+**Local (two terminals):**
+
+```bash
+# Terminal A — FastAPI (unchanged)
+uvicorn main:app --app-dir backend --host 0.0.0.0 --port 8000
+```
+
+```bash
+# Terminal B — same venv as Quick start (``pip install -e .`` exposes ``hackathon_eval``)
+python -m hackathon_eval.uagent_facade
+```
+
+REST defaults to **`http://127.0.0.1:9100`** (override with `UAGENT_PORT`). Point the dashboard at this agent via **`UAGENT_HTTP_BASE`** or **`NEXT_PUBLIC_UAGENT_HTTP`** (see `.env.example`): the Evaluate page can use **“Evaluate via uAgent REST”**, which proxies through Next (`/api/uagent/evaluate/start` and `/api/uagent/evaluate/poll`) and polls until the job completes.
+
+**Agentverse / remote:** Set a stable **`UAGENT_SEED`**, a public **`UAGENT_ENDPOINT`** (tunnel or hosted submit URL matching uAgents conventions), and enable **`UAGENT_MAILBOX=true`** when you are not exposing a listener port directly. **`publish_manifest=True`** is set on the chat protocol for discovery. Scaling out requires an external job store (e.g. Redis); the in-process registry is intentionally single-node.
+
+Optional **`ASI_ONE_API_KEY`**: helpers in `backend/hackathon_eval/uagent_facade/chat_intent.py` use the OpenAI-compatible ASI:One API for messy chat URLs and brief result summaries — they do **not** replace the main judge pipeline.
+
 ## Security and operations
 
 - Secrets in `.env` or a secret manager; never commit keys.

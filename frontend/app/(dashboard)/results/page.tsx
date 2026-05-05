@@ -20,7 +20,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { EvaluationTimeline, PIPELINE_STEPS } from "@/components/evaluation/EvaluationTimeline";
 import { PrintProtocolChecklist } from "@/components/evaluation/PrintProtocolChecklist";
 import { resolveProtocolRows } from "@/lib/evaluation-protocol";
 
@@ -191,16 +190,6 @@ export default function ResultsPage() {
           </CardContent>
         </Card>
       </section>
-
-      <Card className="print-break">
-        <CardHeader>
-          <CardTitle className="text-base">Evaluation timeline</CardTitle>
-          <CardDescription>Reference pipeline (completed when report is ready).</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <EvaluationTimeline activeStep={PIPELINE_STEPS.length - 1} loading={false} />
-        </CardContent>
-      </Card>
 
       <Tabs defaultValue="overview" className="w-full">
         <TabsList className="flex w-full flex-wrap justify-start gap-1">

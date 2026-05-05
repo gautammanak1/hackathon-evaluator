@@ -25,6 +25,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install -e .
+        working-directory: .
       - name: Tests
         run: pytest tests/ -v
 

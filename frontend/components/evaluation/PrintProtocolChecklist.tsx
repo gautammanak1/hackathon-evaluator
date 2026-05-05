@@ -22,12 +22,14 @@ export function PrintProtocolChecklist({ ev }: Props) {
             <th className="border border-black p-2 font-sans">Evidence / notes</th>
           </tr>
         </thead>
-        <tbody className="font-mono">
+        <tbody className="font-sans text-[11px]">
           {rows.map((r) => (
             <tr key={r.label}>
-              <td className="border border-black p-2 font-sans font-semibold">{r.label}</td>
+              <td className="border border-black p-2 font-semibold">{r.label}</td>
               <td className="border border-black p-2">{r.ok ? "Yes" : "No"}</td>
-              <td className="border border-black p-2 whitespace-pre-wrap break-words">{r.detail}</td>
+              <td className="border border-black p-2 whitespace-pre-wrap break-words leading-snug">
+                {r.detail}
+              </td>
             </tr>
           ))}
         </tbody>

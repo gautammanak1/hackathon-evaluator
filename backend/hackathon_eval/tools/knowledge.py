@@ -16,6 +16,7 @@ from hackathon_eval.config import (
     resolve_innovation_labs_docs,
 )
 from hackathon_eval.doc_catalog import canonical_url_for_doc_file, load_url_manifest
+from hackathon_eval.tools.enhanced_rag import EnhancedRetriever, load_curated_error_patterns
 
 MAX_MD_FILES = int(os.getenv("MAX_KNOWLEDGE_MD_FILES", "80"))
 MAX_PROTO_FILES = int(os.getenv("MAX_KNOWLEDGE_PROTO_FILES", "40"))
@@ -127,6 +128,7 @@ def build_retriever(docs: list, k: int = 8):
 
 
 _RETRIEVER_CACHE: dict[str, object] = {}
+_ENHANCED_RETRIEVER_CACHE: dict[str, EnhancedRetriever] = {}
 
 
 def retrieve_context(
@@ -138,6 +140,26 @@ def retrieve_context(
     docs_dir = docs_dir if docs_dir is not None else resolve_innovation_labs_docs()
     agents_dir = agents_dir if agents_dir is not None else resolve_agent_examples()
     cache_key = f"{docs_dir}:{agents_dir}"
+    if cache_key not in _ENHANCED_RETRIEVER_CACHE:
+        all_docs = load_grounding_documents(docs_dir, agents_dir)
+        curated_path = Path(__file__).resolve().parent.parent / "data" / "error_patterns.json"
+        all_docs = list(all_docs) + load_curated_error_patterns(curated_path)
+        _ENHANCED_RETRIEVER_CACHE[cache_key] = EnhancedRetriever(all_docs)
+    enhanced = _ENHANCED_RETRIEVER_CACHE[cache_key]
+    top_k = int(os.getenv("RAG_TOP_K", "16"))
+    bm25_w = float(os.getenv("BM25_WEIGHT", "0.3"))
+    sem_w = float(os.getenv("SEMANTIC_WEIGHT", "0.7"))
+    merged_hits = enhanced.query(query, top_k=top_k, bm25_weight=bm25_w, semantic_weight=sem_w)
+    if merged_hits:
+        parts = []
+        for i, hit in enumerate(merged_hits, 1):
+            d = hit.doc
+            src = d.metadata.get("source", "unknown")
+            cu = d.metadata.get("canonical_url")
+            url_line = f"\ncanonical_url: {cu}\n" if cu else ""
+            parts.append(f"[{i}] source: {src} score={hit.score}{url_line}\n{d.page_content[:2500]}")
+        return "\n\n---\n\n".join(parts)
+
     if cache_key not in _RETRIEVER_CACHE:
         all_docs = load_grounding_documents(docs_dir, agents_dir)
         _RETRIEVER_CACHE[cache_key] = build_retriever(all_docs)
@@ -160,3 +182,4 @@ def retrieve_context(
 
 def clear_knowledge_cache() -> None:
     _RETRIEVER_CACHE.clear()
+    _ENHANCED_RETRIEVER_CACHE.clear()

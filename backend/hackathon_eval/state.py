@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, TypedDict
+from typing import Any, Literal, TypedDict
 
 try:
     from typing import NotRequired
@@ -20,6 +20,9 @@ class EvalState(TypedDict, total=False):
     document_text: NotRequired[str | None]
     # Arbitrary key/values: team_name, table_name, track, or any event-specific columns.
     submission_metadata: NotRequired[dict[str, Any] | None]
+    review_mode: NotRequired[str | None]
+    # "fast" skips deep_code + doc_linker + suggestions + diagrams (MCP default / quick UI).
+    eval_profile: NotRequired[Literal["full", "fast"]]
     work_dir: str
     repo_name: str
 
@@ -41,9 +44,17 @@ class EvalState(TypedDict, total=False):
     # LLM intermediate
     analysis_llm_notes: str
     analysis: NotRequired[dict[str, Any]]
+    issues: NotRequired[list[str]]
 
     protocol_validation: NotRequired[dict[str, Any]]
     benchmark: NotRequired[dict[str, Any]]
+    deep_analysis: NotRequired[dict[str, Any]]
+    suggestions: NotRequired[list[dict[str, Any]]]
+    diagrams: NotRequired[dict[str, Any]]
+    github_issue: NotRequired[dict[str, Any]]
+    doc_links: NotRequired[list[dict[str, Any]]]
+    create_github_issue: NotRequired[bool]
+    github_token: NotRequired[str | None]
 
     # Final structured output
     report: dict[str, Any]

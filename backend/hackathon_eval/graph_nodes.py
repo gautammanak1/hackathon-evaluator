@@ -3,16 +3,25 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import fields
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
+from hackathon_eval.agents import (
+    build_doc_links,
+    generate_repo_diagrams,
+    generate_suggestions,
+    generate_suggestions_llm,
+    maybe_create_github_issue,
+    run_deep_code_analysis,
+)
 from hackathon_eval.benchmarks import compare_to_benchmark
 from hackathon_eval.config import OPENAI_MODEL
 from hackathon_eval.judge_output import AxisScores, JudgeLLMOutput
-from hackathon_eval.prompts_system import get_evaluation_system_prompt
+from ai.prompts.assembly import get_evaluation_system_prompt
 from hackathon_eval.protocol_validation import validate_protocols
 from hackathon_eval.scoring import (
     chat_protocol_score,
@@ -35,7 +44,7 @@ from hackathon_eval.tools.repo_tools import (
 )
 from hackathon_eval.tools.scanner import ScanResult, scan_combined_text
 
-_MAX_SYS_PROMPT_CHARS = int(__import__("os").getenv("MAX_SYS_PROMPT_CHARS", "28000"))
+_MAX_SYS_PROMPT_CHARS = int(os.getenv("MAX_SYS_PROMPT_CHARS", "28000"))
 
 
 def _evaluation_system_message() -> SystemMessage:
@@ -89,15 +98,49 @@ def _heuristic_judge_output(
     else:
         cls = "Good"
     br = benchmark.get("reason") or "Benchmark not configured or unavailable."
-    summ = (
-        f"Heuristic-only classification ({cls}). Overall heuristic score {score}/10. "
-        "Set OPENAI_API_KEY for full LLM narrative and axis refinement."
+    bool_protocols = (
+        f"uAgents={'detected' if flags.get('uagents') else 'absent'}, "
+        f"chat-protocol={'valid' if chat_ok else 'missing/invalid'}, "
+        f"payment-protocol={'valid' if pay_ok else 'missing/invalid'}, "
+        f"LLM-integration={'detected' if flags.get('llm') else 'absent'}"
     )
-    notes_txt = "; ".join(issues) if issues else "No major heuristic issues."
+    issue_preview = "; ".join(issues[:5]) if issues else "no major heuristic issues"
+    summ = (
+        "**Problem this project solves**\n"
+        "Heuristic mode could not infer the user-facing problem from static signals alone. "
+        "Provide a model API key (FetchDocsAssistant uses the OpenAI Agents SDK + the prebuilt "
+        "Fetch.ai docs vector store) so the judge can read the README and agent docstrings.\n\n"
+        "**The idea & approach**\n"
+        f"From static markers the repo intends to integrate with Fetch.ai: {bool_protocols}. "
+        "Without an LLM the judge can only enumerate which primitives are present; the conceptual "
+        "design walkthrough is best-effort and may be incomplete.\n\n"
+        "**How it is built**\n"
+        f"Deterministic axes settled at architecture {arch}, protocols {prot}, ai_usage {ai_u}, "
+        f"code_quality {code_q}, innovation {innov} (each 0–10). "
+        f"Code-quality structure points: {struct_pts}/3. "
+        f"Benchmark grounding: {br}. The LLM provider is expected to be ASI:One via "
+        "`https://api.asi1.ai/v1` — any plain OpenAI client found in the code is itself a defect.\n\n"
+        "**Notable strengths (with code evidence)**\n"
+        "Heuristic mode does not surface code-evidenced strengths. Re-run the evaluator with the "
+        "FetchDocsAssistant agent enabled (set OPENAI_API_KEY) to see file-grounded strengths.\n\n"
+        "**Critical risks & next-step recommendation**\n"
+        f"Top reviewer issues seen heuristically: {issue_preview}. "
+        "Next step: enable the LLM path so the auto-fixer can patch missing ChatProtocol scaffolds "
+        "and migrate any plain OpenAI calls to ASI:One automatically."
+    )
+    notes_txt = (
+        "; ".join(issues) if issues else "No major heuristic issues."
+    )
     return JudgeLLMOutput(
         classification=cls,
-        problem_solved="Not inferred in heuristic mode; provide OPENAI_API_KEY for LLM analysis.",
-        solution_overview="Not inferred in heuristic mode; provide OPENAI_API_KEY for LLM analysis.",
+        problem_solved=(
+            "Heuristic mode could not infer the user-facing problem from static signals alone. "
+            "Provide an LLM key so the judge can read the README and agent docstrings directly."
+        ),
+        solution_overview=(
+            "Heuristic mode only enumerates protocol markers. With an LLM key the judge would walk "
+            "through entry points, handler chains, and LLM call sites to describe the solution end-to-end."
+        ),
         scores=axes,
         benchmark_reason=br,
         summary=summ,
@@ -109,8 +152,6 @@ def _heuristic_judge_output(
 
 
 def node_repo_ingestion(state: EvalState) -> dict[str, Any]:
-    import os
-
     url = (state.get("repo_url") or "").strip()
     branch = state.get("branch")
     doc_text = (state.get("document_text") or "").strip()
@@ -240,9 +281,153 @@ def node_benchmark_compare(state: EvalState) -> dict[str, Any]:
     return {"benchmark": bench}
 
 
-def node_evaluation(state: EvalState) -> dict[str, Any]:
-    import os
+def node_deep_code_analysis(state: EvalState) -> dict[str, Any]:
+    return run_deep_code_analysis(state)
 
+
+def node_doc_linker(state: EvalState) -> dict[str, Any]:
+    issues = state.get("issues") or []
+    if not issues:
+        issues = ((state.get("analysis") or {}).get("issues") or []) if isinstance(state.get("analysis"), dict) else []
+    if not issues:
+        deep = state.get("deep_analysis") or {}
+        sec = deep.get("security") if isinstance(deep, dict) else []
+        if sec:
+            issues.append("Critical: hardcoded secrets or injection patterns detected")
+        proto = (deep.get("protocol_compliance_ast") or {}) if isinstance(deep, dict) else {}
+        if isinstance(proto, dict):
+            if not proto.get("chat_protocol", True):
+                issues.append("Chat protocol invalid or incomplete")
+            if not proto.get("payment_protocol", True):
+                issues.append("Payment protocol invalid or incomplete")
+            if not proto.get("uagents", True):
+                issues.append("uAgents implementation missing")
+    return {"doc_links": build_doc_links(issues, state.get("deep_analysis"))}
+
+
+def node_suggestion_generator(state: EvalState) -> dict[str, Any]:
+    issues = ((state.get("analysis") or {}).get("issues") or []) if isinstance(state.get("analysis"), dict) else []
+    deep = state.get("deep_analysis") or {}
+    if isinstance(deep, dict):
+        for w in (deep.get("weaknesses") or []):
+            if isinstance(w, dict) and w.get("title"):
+                issues.append(f"{w.get('title')} [severity: {w.get('severity','medium')}]")
+    if not issues:
+        if isinstance(deep, dict) and deep.get("security"):
+            issues.append("Critical security issues detected in source code")
+    max_suggestions = int(os.getenv("MAX_SUGGESTIONS", "15"))
+    doc_links = state.get("doc_links") or []
+
+    llm_suggestions = generate_suggestions_llm(
+        issues=issues,
+        doc_links=doc_links,
+        deep_analysis=state.get("deep_analysis"),
+        knowledge_context=state.get("knowledge_context", "") or "",
+        code_semantic_sketch=state.get("code_semantic_sketch", "") or "",
+        code_excerpt=state.get("combined_source_excerpt", "") or "",
+        repo_name=state.get("repo_name", "") or "",
+        max_suggestions=max_suggestions,
+    )
+
+    if llm_suggestions:
+        return {"suggestions": llm_suggestions}
+
+    return {
+        "suggestions": generate_suggestions(
+            issues=issues,
+            doc_links=doc_links,
+            deep_analysis=state.get("deep_analysis"),
+            max_suggestions=max_suggestions,
+        )
+    }
+
+
+def node_diagram_generator(state: EvalState) -> dict[str, Any]:
+    analysis = state.get("analysis") or {}
+    flags = analysis.get("flags") if isinstance(analysis, dict) else None
+    if not isinstance(flags, dict):
+        flags = {}
+    diagrams = generate_repo_diagrams(
+        repo_name=state.get("repo_name", "") or "",
+        flags=flags,
+        file_paths=state.get("file_paths") or [],
+        code_excerpt=state.get("combined_source_excerpt", "") or "",
+        code_semantic_sketch=state.get("code_semantic_sketch", "") or "",
+        deep_analysis=state.get("deep_analysis"),
+    )
+    return {"diagrams": diagrams}
+
+
+def node_github_issue_reporter(state: EvalState) -> dict[str, Any]:
+    # If the key is present (e.g. MCP sets ``create_github_issue: False``), honour it and do
+    # **not** upgrade via ``GITHUB_AUTO_ISSUE``. If the key is absent, keep legacy behaviour:
+    # server-wide auto-issue when ``GITHUB_AUTO_ISSUE`` is truthy (HTTP /evaluate default).
+    if "create_github_issue" in state:
+        create_issue = bool(state["create_github_issue"])
+    else:
+        create_issue = os.getenv("GITHUB_AUTO_ISSUE", "false").lower() in {"1", "true", "yes"}
+
+    if not create_issue:
+        return {"github_issue": {"created": False, "issue_url": None, "reason": "disabled"}}
+    report_payload = state.get("report") if isinstance(state.get("report"), dict) else {}
+    if not report_payload:
+        # Fallback snapshot if report wasn't materialized for any reason.
+        report_payload = {
+            "repo_name": state.get("repo_name") or "",
+            "issues": ((state.get("analysis") or {}).get("issues") or []) if isinstance(state.get("analysis"), dict) else [],
+            "report_v2": {
+                "repo_name": state.get("repo_name") or "",
+                "classification": ((state.get("analysis") or {}).get("reflection") or {}).get("classification", "unknown")
+                if isinstance(state.get("analysis"), dict)
+                else "unknown",
+                "score": ((state.get("analysis") or {}).get("heuristic_score"))
+                if isinstance(state.get("analysis"), dict)
+                else None,
+                "features": {
+                    "uagents": bool((state.get("features") or {}).get("uagents_usage")) if isinstance(state.get("features"), dict) else False,
+                    "chat_protocol": bool(((state.get("features") or {}).get("chat_protocol") or {}).get("implemented"))
+                    if isinstance(state.get("features"), dict)
+                    else False,
+                    "payment_protocol": bool(((state.get("features") or {}).get("payment_protocol") or {}).get("implemented"))
+                    if isinstance(state.get("features"), dict)
+                    else False,
+                    "llm_integration": bool(((state.get("features") or {}).get("asi1_llm") or {}).get("implemented"))
+                    if isinstance(state.get("features"), dict)
+                    else False,
+                },
+            },
+        }
+    report_payload = {
+        **report_payload,
+        "doc_links": state.get("doc_links") or report_payload.get("doc_links") or [],
+        "suggestions": state.get("suggestions") or report_payload.get("suggestions") or [],
+    }
+
+    try:
+        result = maybe_create_github_issue(
+            report=report_payload,
+            repo_url=(state.get("repo_url") or ""),
+            create_issue=create_issue,
+            request_token=state.get("github_token"),
+        )
+    except Exception as exc:
+        result = {"created": False, "issue_url": None, "reason": str(exc)}
+    patch: dict[str, Any] = {"github_issue": result}
+    if isinstance(state.get("report"), dict):
+        merged = dict(state["report"])
+        merged["github_issue"] = result
+        merged["github_issue_url"] = result.get("issue_url")
+        rv2 = merged.get("report_v2")
+        if isinstance(rv2, dict):
+            rv2 = dict(rv2)
+            rv2["github_issue"] = result
+            rv2["github_issue_url"] = result.get("issue_url")
+            merged["report_v2"] = rv2
+        patch["report"] = merged
+    return patch
+
+
+def node_evaluation(state: EvalState) -> dict[str, Any]:
     s = _scan_from_state(state)
     stats = state.get("repo_stats") or {}
     excerpt = state.get("combined_source_excerpt") or ""
@@ -267,6 +452,7 @@ def node_evaluation(state: EvalState) -> dict[str, Any]:
         "llm": l[0],
         "payment": p[0],
     }
+    deep = state.get("deep_analysis") if isinstance(state.get("deep_analysis"), dict) else {}
     payload = {
         "repo_name": state.get("repo_name"),
         "quality_score_heuristic": score,
@@ -276,6 +462,8 @@ def node_evaluation(state: EvalState) -> dict[str, Any]:
         "scan_signals": s.signals[:40],
         "PROTOCOL_VALIDATION": protocol_validation,
         "BENCHMARK": benchmark,
+        "DEEP_STRENGTHS": deep.get("strengths", []),
+        "DEEP_WEAKNESSES": deep.get("weaknesses", []),
     }
     sub = (state.get("submission_context") or "").strip()
     sub_block = f"SUBMISSION_CONTEXT:\n{sub[:6000]}\n\n" if sub else ""
@@ -329,8 +517,10 @@ def node_evaluation(state: EvalState) -> dict[str, Any]:
         "struct_note": struct_note,
         "reflection": reflection.model_dump(),
         "flags": flags,
+        "strengths": deep.get("strengths", []),
+        "weaknesses": deep.get("weaknesses", []),
     }
-    return {"analysis_llm_notes": json.dumps(analysis), "analysis": analysis}
+    return {"analysis_llm_notes": json.dumps(analysis), "analysis": analysis, "issues": issues}
 
 
 def node_report_generator(state: EvalState) -> dict[str, Any]:
@@ -377,6 +567,7 @@ def node_report_generator(state: EvalState) -> dict[str, Any]:
     meta_out = state.get("submission_metadata") if isinstance(state.get("submission_metadata"), dict) else {}
     report_v2 = {
         "repo_name": state.get("repo_name") or "",
+        "review_mode": state.get("review_mode") or os.getenv("REVIEW_MODE", "strict_reviewer"),
         "submission_metadata": meta_out,
         "score": top_score,
         "classification": judge.classification,
@@ -408,6 +599,14 @@ def node_report_generator(state: EvalState) -> dict[str, Any]:
         "solution_overview": judge.solution_overview,
         "summary": judge.summary,
         "notes": judge.notes,
+        "strengths": analysis.get("strengths", []) if isinstance(analysis, dict) else [],
+        "weaknesses": analysis.get("weaknesses", []) if isinstance(analysis, dict) else [],
+        "deep_analysis": state.get("deep_analysis") or {},
+        "suggestions": state.get("suggestions") or [],
+        "diagrams": state.get("diagrams") or {},
+        "doc_links": state.get("doc_links") or [],
+        "github_issue_url": ((state.get("github_issue") or {}).get("issue_url")),
+        "github_issue": state.get("github_issue") or {},
     }
 
     struct_note = analysis.get("struct_note") if isinstance(analysis, dict) else ""
@@ -442,6 +641,11 @@ def node_report_generator(state: EvalState) -> dict[str, Any]:
         "protocol_validation": report_v2["protocol_validation"],
         "scores": report_v2["scores"],
         "benchmark": report_v2["benchmark"],
+        "strengths": report_v2["strengths"],
+        "weaknesses": report_v2["weaknesses"],
+        "github_issue_url": report_v2["github_issue_url"],
+        "github_issue": report_v2["github_issue"],
+        "diagrams": report_v2["diagrams"],
     }
 
     report = {"report_v2": report_v2, "report_legacy": legacy, **legacy}
@@ -454,5 +658,10 @@ NODE_PROTOCOL = "protocol_validation"
 NODE_FEATURES = "feature_detection"
 NODE_KNOWLEDGE = "knowledge_grounding"
 NODE_BENCHMARK = "benchmark_compare"
+NODE_DEEP_CODE = "deep_code_analysis"
+NODE_GITHUB_ISSUES = "github_issue_reporter"
+NODE_SUGGESTIONS = "suggestion_generator"
+NODE_DIAGRAMS = "diagram_generator"
+NODE_DOC_LINKER = "documentation_linker"
 NODE_EVAL = "evaluation"
 NODE_REPORT = "report_generator"

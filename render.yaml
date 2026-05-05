@@ -30,3 +30,41 @@ services:
         value: gpt-4o
       - key: OPENAI_EMBEDDING_MODEL
         value: text-embedding-3-small
+      # --- Optional FetchDocsAssistant (Agents SDK) overrides ---
+      - key: FETCH_DOCS_VECTOR_STORE_ID
+        sync: false
+      - key: FETCH_DOCS_AGENT_MODEL
+        value: gpt-4o
+      - key: OPENAI_AGENTS_TRACING_ENABLED
+        value: ""
+      - key: HTTP_LOG_DEBUG
+        value: ""
+      # --- Performance / concurrency ---
+      - key: EVAL_THREAD_POOL_WORKERS
+        value: "12"
+      # --- MCP (SSE) — exposed at /mcp; GET /meta/mcp for full URL ---
+      - key: MCP_ENABLED
+        value: "true"
+      - key: MCP_MOUNT_PATH
+        value: /mcp
+      - key: MCP_PUBLIC_BASE_URL
+        sync: false
+      # --- Persistence + GitHub fallback ---
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: GITHUB_AUTO_ISSUE
+        value: "false"
+      - key: REVIEW_MODE
+        value: strict_reviewer
+      # --- Supabase (used by FastAPI persistence) ---
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      # --- Admin JWT ---
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: ADMIN_JWT_SECRET
+        sync: false

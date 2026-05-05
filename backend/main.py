@@ -2,30 +2,82 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
+import re
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, model_validator
+try:
+    from sse_starlette.sse import EventSourceResponse
+except Exception:  # pragma: no cover
+    EventSourceResponse = None  # type: ignore[assignment]
 
 from hackathon_eval.batch_file_parse import BatchEvaluateItem, parse_batch_upload
 from hackathon_eval.canonical_report import build_canonical_payload
 from hackathon_eval.config import API_CORS_ORIGINS
-from hackathon_eval.graph import invoke_graph_timed
+from hackathon_eval.graph import build_evaluation_graph, invoke_graph_timed
+from hackathon_eval.agents.github_issue_reporter import maybe_create_github_issue
 from hackathon_eval.pdf_extract import extract_pdf_text
 from hackathon_eval.pdf_urls import find_github_repo_urls
+from hackathon_eval.admin_auth import AdminAuthError, verify_admin_token
+from hackathon_eval.persistence import admin_evaluations as db_admin_evaluations
+from hackathon_eval.persistence import admin_repos as db_admin_repos
+from hackathon_eval.persistence import admin_stats as db_admin_stats
+from hackathon_eval.persistence import admin_users as db_admin_users
 from hackathon_eval.persistence import delete_evaluation as db_delete_evaluation
 from hackathon_eval.persistence import list_evaluations as db_list_evaluations
 from hackathon_eval.persistence import load_evaluation as db_load_evaluation
+from hackathon_eval.persistence import load_suggestions as db_load_suggestions
+from hackathon_eval.persistence import set_github_issue_url as db_set_github_issue_url
 from hackathon_eval.persistence import save_evaluation
 from hackathon_eval.tools.repo_tools import remove_path
 
 load_dotenv()
 
-app = FastAPI(title="Hackathon Evaluator API", version="1.0.0")
+
+def _configure_third_party_log_noise() -> None:
+    """Keep terminal readable: httpx INFO logs every OpenAI request + traces/ingest.
+
+    Tracing can stay enabled via ``OPENAI_AGENTS_TRACING_ENABLED``; this only
+    suppresses chatty client HTTP logs (set ``HTTP_LOG_DEBUG=1`` to re-enable).
+    """
+    if os.getenv("HTTP_LOG_DEBUG", "").strip().lower() in {"1", "true", "yes"}:
+        return
+    for name in ("httpx", "httpcore", "openai"):
+        logging.getLogger(name).setLevel(logging.WARNING)
+
+
+_configure_third_party_log_noise()
+
+
+@asynccontextmanager
+async def _app_lifespan(_: FastAPI):
+    """Larger default thread pool so MCP (``asyncio.to_thread``) + /evaluate can run together."""
+    import concurrent.futures
+
+    try:
+        workers = int(os.getenv("EVAL_THREAD_POOL_WORKERS", "12"))
+    except ValueError:
+        workers = 12
+    workers = max(4, min(32, workers))
+    exe = concurrent.futures.ThreadPoolExecutor(max_workers=workers)
+    asyncio.get_running_loop().set_default_executor(exe)
+    yield
+    exe.shutdown(wait=False, cancel_futures=True)
+
+
+app = FastAPI(
+    title="Hackathon Evaluator API",
+    version="1.0.0",
+    lifespan=_app_lifespan,
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -36,6 +88,21 @@ app.add_middleware(
 )
 
 
+def _mount_mcp(app: FastAPI) -> None:
+    if os.getenv("MCP_ENABLED", "true").strip().lower() in {"0", "false", "no"}:
+        return
+    from ai.mcp_server import sse_starlette_mount
+
+    mp = (os.getenv("MCP_MOUNT_PATH") or "/mcp").strip()
+    if not mp.startswith("/"):
+        mp = "/" + mp
+    mp = mp.rstrip("/") or "/mcp"
+    app.mount(mp, sse_starlette_mount(mp))
+
+
+_mount_mcp(app)
+
+
 class EvaluateRequest(BaseModel):
     """Either `repo_url` or `document_text` (or both) must be provided."""
 
@@ -44,6 +111,11 @@ class EvaluateRequest(BaseModel):
     submission_context: str | None = None
     document_text: str | None = None
     submission_metadata: dict[str, Any] | None = None
+    review_mode: str | None = None
+    create_github_issue: bool = False
+    github_token: str | None = None
+    user_github_login: str | None = None
+    eval_profile: Literal["full", "fast"] | None = None
 
     model_config = {"extra": "ignore"}
 
@@ -84,9 +156,84 @@ class SubmissionEvaluateResponse(BaseModel):
     submission_ids: list[str] | None = None
 
 
+class DeepEvaluateRequest(EvaluateRequest):
+    pass
+
+
+class CreateIssueRequest(BaseModel):
+    repo_url: str
+    github_token: str | None = None
+    pr_number: int | None = None
+
+
 def _github_ok(url: str) -> bool:
     u = url.strip()
     return "github.com" in u or u.startswith("git@")
+
+
+_GITHUB_OWNER_RE = re.compile(
+    r"^https?://github\.com/([^/\s]+)/([^/\s#?]+?)(?:\.git)?/?$",
+    re.IGNORECASE,
+)
+
+
+def _extract_owner(url: str) -> str | None:
+    m = _GITHUB_OWNER_RE.match(url.strip())
+    if not m:
+        return None
+    return m.group(1)
+
+
+def _enforce_repo_ownership(
+    repo_url: str | None,
+    user_github_login: str | None,
+    *,
+    is_admin: bool,
+) -> None:
+    """Raise 403 unless the repo owner matches the signed-in GitHub login (or admin)."""
+    if is_admin:
+        return
+    url = (repo_url or "").strip()
+    if not url:
+        return
+    owner = _extract_owner(url)
+    login = (user_github_login or "").strip()
+    if not login:
+        raise HTTPException(
+            status_code=401,
+            detail="user_github_login is required for non-admin evaluations",
+        )
+    if not owner:
+        # Non-standard URL — fail closed.
+        raise HTTPException(
+            status_code=400,
+            detail="repo_url must look like https://github.com/<owner>/<repo>",
+        )
+    if owner.lower() != login.lower():
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "You can only analyse repositories you own on GitHub. "
+                f"This repo belongs to '{owner}', but you are signed in as '{login}'."
+            ),
+        )
+
+
+def _is_admin_request(token: str | None) -> bool:
+    if not token:
+        return False
+    try:
+        verify_admin_token(token)
+        return True
+    except AdminAuthError:
+        return False
+
+
+def require_admin(x_admin_token: str | None = Header(default=None)) -> dict[str, Any]:
+    try:
+        return verify_admin_token(x_admin_token)
+    except AdminAuthError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
 
 
 def _resolve_source_url(payload: dict[str, Any]) -> str:
@@ -149,6 +296,11 @@ def _build_payload(
     submission_context: str | None,
     document_text: str | None,
     submission_metadata: dict[str, Any] | None,
+    review_mode: str | None = None,
+    create_github_issue: bool = False,
+    github_token: str | None = None,
+    user_github_login: str | None = None,
+    eval_profile: Literal["full", "fast"] | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {}
     if (repo_url or "").strip():
@@ -161,12 +313,30 @@ def _build_payload(
     doc = (document_text or "").strip()
     if doc:
         payload["document_text"] = doc
-    if submission_metadata:
-        payload["submission_metadata"] = dict(submission_metadata)
+    meta: dict[str, Any] = dict(submission_metadata or {})
+    if user_github_login and "github_login" not in meta:
+        meta["github_login"] = user_github_login
+    if meta:
+        payload["submission_metadata"] = meta
+    if (review_mode or "").strip():
+        payload["review_mode"] = str(review_mode).strip()
+    if create_github_issue:
+        payload["create_github_issue"] = True
+    if github_token:
+        payload["github_token"] = github_token
+    if eval_profile in ("full", "fast"):
+        payload["eval_profile"] = eval_profile
     return payload
 
 
-def _run_batch(items: list[BatchEvaluateItem]) -> tuple[list[dict[str, Any]], list[str]]:
+def _run_batch(
+    items_or_graph: list[BatchEvaluateItem] | Any,
+    maybe_items: list[BatchEvaluateItem] | None = None,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    # Backward compatibility for tests/older callers passing (_graph, items).
+    items = maybe_items if maybe_items is not None else items_or_graph
+    if not isinstance(items, list):
+        return [], []
     results: list[dict[str, Any]] = []
     ids: list[str] = []
     for item in items:
@@ -198,9 +368,42 @@ def _run_batch(items: list[BatchEvaluateItem]) -> tuple[list[dict[str, Any]], li
     return results, ids
 
 
+def _normalize_batch_output(raw: Any) -> tuple[list[dict[str, Any]], list[str]]:
+    if isinstance(raw, tuple) and len(raw) == 2:
+        return raw[0], raw[1]
+    if isinstance(raw, list):
+        return raw, []
+    return [], []
+
+
 @app.get("/health")
 def health():
     return {"ok": True}
+
+
+@app.get("/meta/mcp")
+def mcp_discovery(request: Request):
+    """Public MCP SSE endpoints for external clients (Cursor / Claude / etc.)."""
+    mp = (os.getenv("MCP_MOUNT_PATH") or "/mcp").strip()
+    if not mp.startswith("/"):
+        mp = "/" + mp
+    mp = mp.rstrip("/") or "/mcp"
+    public = (os.getenv("MCP_PUBLIC_BASE_URL") or "").strip().rstrip("/")
+    base = public or str(request.base_url).rstrip("/")
+    return {
+        "mcp_sse_url": f"{base}{mp}/sse",
+        "mcp_messages_post_path": f"{mp}/messages/",
+        "mount_path": mp,
+        "hint": "Register the SSE URL in your MCP client; POST JSON-RPC to messages path per MCP streamable HTTP spec.",
+    }
+
+
+@app.get("/health/detailed")
+def health_detailed():
+    llm_ok = bool(os.getenv("OPENAI_API_KEY"))
+    rag_ok = bool(os.getenv("INNOVATION_LABS_DOCS") or os.path.isdir("data/innovation-labs-docs"))
+    gh_ok = bool(os.getenv("GITHUB_TOKEN"))
+    return {"ok": True, "components": {"llm": llm_ok, "rag": rag_ok, "github_api": gh_ok}}
 
 
 @app.get("/evaluation/{evaluation_id}")
@@ -223,16 +426,46 @@ def list_evaluations_endpoint(limit: int = 50, offset: int = 0):
     return {"items": db_list_evaluations(limit=limit, offset=offset)}
 
 
+# ---------------------------------------------------------------------------
+# Admin endpoints (X-Admin-Token JWT — issued by Next.js admin login route)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/admin/stats")
+def admin_stats_endpoint(_admin: dict[str, Any] = Depends(require_admin)):
+    return db_admin_stats()
+
+
+@app.get("/admin/users")
+def admin_users_endpoint(_admin: dict[str, Any] = Depends(require_admin)):
+    return {"items": db_admin_users()}
+
+
+@app.get("/admin/repos")
+def admin_repos_endpoint(_admin: dict[str, Any] = Depends(require_admin)):
+    return {"items": db_admin_repos()}
+
+
+@app.get("/admin/evaluations")
+def admin_evaluations_endpoint(
+    limit: int = 50,
+    offset: int = 0,
+    _admin: dict[str, Any] = Depends(require_admin),
+):
+    return {"items": db_admin_evaluations(limit=limit, offset=offset)}
+
+
 _MAX_BATCH_JSON = 40
 _MAX_BATCH_FILE = 100
 
 
 @app.post("/evaluate", response_model=EvaluateResponse)
-def evaluate(req: EvaluateRequest):
+def evaluate(req: EvaluateRequest, x_admin_token: str | None = Header(default=None)):
     url = (req.repo_url or "").strip()
-    doc = (req.document_text or "").strip()
     if url and not _github_ok(url):
         raise HTTPException(status_code=400, detail="repo_url must be a GitHub repository")
+    is_admin = _is_admin_request(x_admin_token)
+    _enforce_repo_ownership(req.repo_url, req.user_github_login, is_admin=is_admin)
     try:
         payload = _build_payload(
             repo_url=req.repo_url,
@@ -240,13 +473,55 @@ def evaluate(req: EvaluateRequest):
             submission_context=req.submission_context,
             document_text=req.document_text,
             submission_metadata=req.submission_metadata,
+            review_mode=req.review_mode,
+            create_github_issue=req.create_github_issue,
+            github_token=req.github_token,
+            user_github_login=req.user_github_login,
+            eval_profile=req.eval_profile,
         )
         merged, sid = _evaluate_payload(payload)
         return EvaluateResponse(evaluation=merged, submission_id=sid)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@app.post("/evaluate/deep-analysis", response_model=EvaluateResponse)
+def evaluate_deep_analysis(req: DeepEvaluateRequest, x_admin_token: str | None = Header(default=None)):
+    return evaluate(req, x_admin_token)
+
+
+@app.get("/evaluate/{submission_id}/suggestions")
+def get_suggestions(submission_id: str, severity: str | None = None):
+    severities: set[str] | None = None
+    if severity:
+        severities = {s.strip().lower() for s in severity.split(",") if s.strip()}
+    items = db_load_suggestions(submission_id.strip(), severities=severities)
+    return {"submission_id": submission_id.strip(), "count": len(items), "suggestions": items}
+
+
+@app.post("/evaluate/{submission_id}/create-issue")
+def create_issue_for_evaluation(submission_id: str, req: CreateIssueRequest):
+    row = db_load_evaluation(submission_id.strip())
+    if row is None:
+        raise HTTPException(status_code=404, detail="Evaluation not found")
+    try:
+        res = maybe_create_github_issue(
+            report=row,
+            repo_url=req.repo_url,
+            create_issue=True,
+            request_token=req.github_token,
+            pr_number=req.pr_number,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    issue_url = res.get("issue_url")
+    if issue_url:
+        db_set_github_issue_url(submission_id.strip(), str(issue_url))
+    return {"submission_id": submission_id.strip(), **res}
 
 
 @app.post("/evaluate/submission", response_model=SubmissionEvaluateResponse)
@@ -254,8 +529,9 @@ async def evaluate_submission(
     repo_url: str | None = Form(default=None),
     branch: str | None = Form(default=None),
     pdf: UploadFile | None = File(default=None),
+    _admin: dict[str, Any] = Depends(require_admin),
 ):
-    """Multipart: optional GitHub URL plus optional PDF. Spreadsheet PDFs with many github.com links are auto-batched."""
+    """Multipart: optional GitHub URL plus optional PDF. Admin-only."""
     doc_text = ""
     if pdf is not None and (pdf.filename or "").strip():
         body = await pdf.read()
@@ -295,7 +571,7 @@ async def evaluate_submission(
             )
             for i, u in enumerate(found)
         ]
-        results, ids = _run_batch(items)
+        results, ids = _normalize_batch_output(_run_batch(build_evaluation_graph(), items))
         return SubmissionEvaluateResponse(
             mode="batch",
             evaluation=None,
@@ -350,19 +626,22 @@ async def evaluate_submission(
 
 
 @app.post("/evaluate/batch", response_model=BatchEvaluateResponse)
-def evaluate_batch(req: BatchEvaluateRequest):
+def evaluate_batch(req: BatchEvaluateRequest, _admin: dict[str, Any] = Depends(require_admin)):
     if len(req.items) > _MAX_BATCH_JSON:
         raise HTTPException(
             status_code=400,
             detail=f"At most {_MAX_BATCH_JSON} items in JSON batch",
         )
-    results, _ids = _run_batch(req.items)
+    results, _ids = _normalize_batch_output(_run_batch(build_evaluation_graph(), req.items))
     return BatchEvaluateResponse(results=results, count=len(req.items))
 
 
 @app.post("/evaluate/batch/upload", response_model=BatchEvaluateResponse)
-async def evaluate_batch_upload(file: UploadFile = File(...)):
-    """Upload `.csv` or `.xlsx` with a GitHub URL column (`repo_url`, `url`, `repository`, or `repo`). Other columns become `submission_metadata`."""
+async def evaluate_batch_upload(
+    file: UploadFile = File(...),
+    _admin: dict[str, Any] = Depends(require_admin),
+):
+    """Upload `.csv` or `.xlsx` (admin-only) with a GitHub URL column (`repo_url`, `url`, `repository`, or `repo`)."""
     raw = await file.read()
     name = file.filename or "upload.csv"
     try:
@@ -381,8 +660,40 @@ async def evaluate_batch_upload(file: UploadFile = File(...)):
             status_code=400,
             detail=f"At most {_MAX_BATCH_FILE} rows per file",
         )
-    results, _ids = _run_batch(items)
+    results, _ids = _normalize_batch_output(_run_batch(build_evaluation_graph(), items))
     return BatchEvaluateResponse(results=results, count=len(items))
+
+
+@app.post("/evaluate/stream")
+async def evaluate_stream(req: EvaluateRequest):
+    if EventSourceResponse is None:
+        raise HTTPException(status_code=503, detail="SSE streaming dependency not installed")
+    payload = _build_payload(
+        repo_url=req.repo_url,
+        branch=req.branch,
+        submission_context=req.submission_context,
+        document_text=req.document_text,
+        submission_metadata=req.submission_metadata,
+        create_github_issue=req.create_github_issue,
+        github_token=req.github_token,
+        review_mode=req.review_mode,
+        eval_profile=req.eval_profile,
+    )
+
+    async def _event_gen():
+        report, steps, _work_dir = invoke_graph_timed(payload)
+        for step in steps:
+            yield {"event": "step", "data": str(step)}
+        merged, sid = _persist_and_merge(
+            report,
+            steps=steps,
+            submission_metadata=payload.get("submission_metadata"),
+            source_url=_resolve_source_url(payload),
+            submission_type=_submission_type(payload),
+        )
+        yield {"event": "done", "data": str({"submission_id": sid, "evaluation": merged})}
+
+    return EventSourceResponse(_event_gen())
 
 
 if __name__ == "__main__":

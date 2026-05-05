@@ -13,7 +13,7 @@ _BACKEND = Path(__file__).resolve().parent.parent
 _MANIFEST_CANDIDATES = [
     Path(os.getenv("DOC_URL_MANIFEST", "").strip()) if os.getenv("DOC_URL_MANIFEST") else None,
     PROMPTS_DIR / "doc_url_manifest.json",
-    _BACKEND / "prompts" / "doc_url_manifest.json",
+    _BACKEND / "ai" / "prompts" / "doc_url_manifest.json",
 ]
 
 

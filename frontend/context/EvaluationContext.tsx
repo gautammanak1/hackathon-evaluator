@@ -1,7 +1,7 @@
 "use client";
 
 import React, { createContext, useCallback, useContext, useMemo, useState } from "react";
-import type { BatchResultEntry, EvaluationResult } from "@/lib/api";
+import type { BatchResultEntry, DocLink, EvaluationResult, Suggestion } from "@/lib/api";
 
 type EvaluationContextValue = {
   single: EvaluationResult | null;
@@ -10,6 +10,9 @@ type EvaluationContextValue = {
   setSingle: (r: EvaluationResult | null) => void;
   setBatch: (rows: BatchResultEntry[] | null, notice?: string | null) => void;
   clear: () => void;
+  suggestions: Suggestion[] | null;
+  docLinks: DocLink[] | null;
+  setDeepArtifacts: (suggestions: Suggestion[] | null, docLinks: DocLink[] | null) => void;
 };
 
 const EvaluationContext = createContext<EvaluationContextValue | null>(null);
@@ -18,12 +21,16 @@ export function EvaluationProvider({ children }: { children: React.ReactNode }) 
   const [single, setSingleState] = useState<EvaluationResult | null>(null);
   const [batch, setBatchState] = useState<BatchResultEntry[] | null>(null);
   const [batchNotice, setBatchNotice] = useState<string | null>(null);
+  const [suggestions, setSuggestions] = useState<Suggestion[] | null>(null);
+  const [docLinks, setDocLinks] = useState<DocLink[] | null>(null);
 
   const setSingle = useCallback((r: EvaluationResult | null) => {
     setSingleState(r);
     if (r) {
       setBatchState(null);
       setBatchNotice(null);
+      setSuggestions((r.suggestions ?? r.report_v2?.suggestions ?? null) as Suggestion[] | null);
+      setDocLinks((r.doc_links ?? r.report_v2?.doc_links ?? null) as DocLink[] | null);
     }
   }, []);
 
@@ -32,18 +39,27 @@ export function EvaluationProvider({ children }: { children: React.ReactNode }) 
     setBatchNotice(notice ?? null);
     if (rows) {
       setSingleState(null);
+      setSuggestions(null);
+      setDocLinks(null);
     }
+  }, []);
+
+  const setDeepArtifacts = useCallback((nextSuggestions: Suggestion[] | null, nextDocLinks: DocLink[] | null) => {
+    setSuggestions(nextSuggestions);
+    setDocLinks(nextDocLinks);
   }, []);
 
   const clear = useCallback(() => {
     setSingleState(null);
     setBatchState(null);
     setBatchNotice(null);
+    setSuggestions(null);
+    setDocLinks(null);
   }, []);
 
   const value = useMemo(
-    () => ({ single, batch, batchNotice, setSingle, setBatch, clear }),
-    [single, batch, batchNotice, setSingle, setBatch, clear],
+    () => ({ single, batch, batchNotice, setSingle, setBatch, clear, suggestions, docLinks, setDeepArtifacts }),
+    [single, batch, batchNotice, setSingle, setBatch, clear, suggestions, docLinks, setDeepArtifacts],
   );
 
   return <EvaluationContext.Provider value={value}>{children}</EvaluationContext.Provider>;

@@ -40,12 +40,6 @@ def resolve_innovation_labs_docs() -> Path | None:
         return p
     if _DEFAULT_BUNDLED_DOCS.exists():
         return _DEFAULT_BUNDLED_DOCS
-    # Legacy dev default only if explicitly enabled (avoids leaking fixed home paths in prod)
-    legacy = os.getenv("INNOVATION_LABS_DOCS_LEGACY_DEV", "").strip().lower() in {"1", "true", "yes"}
-    if legacy:
-        dev = Path("/Users/engineer/innovationlab-resources/innovation-labs/docs")
-        if dev.exists():
-            return dev
     return None
 
 
@@ -56,20 +50,15 @@ def resolve_agent_examples() -> Path | None:
         return p
     if _DEFAULT_BUNDLED_AGENTS.exists():
         return _DEFAULT_BUNDLED_AGENTS
-    legacy = os.getenv("INNOVATION_LAB_AGENTS_LEGACY_DEV", "").strip().lower() in {"1", "true", "yes"}
-    if legacy:
-        dev = Path("/Users/engineer/innovation-lab-agents/agents")
-        if dev.exists():
-            return dev
     return None
 
 
 def resolve_prompts_dir() -> Path:
-    """Bundled prompt / rules markdown under `backend/prompts`."""
+    """Bundled prompts live under ``backend/ai/prompts`` (static markdown under ``static/``)."""
     env = os.getenv("PROMPTS_DIR", "").strip()
     if env:
         return Path(env).expanduser()
-    return _BACKEND_ROOT / "prompts"
+    return _BACKEND_ROOT / "ai" / "prompts"
 
 
 # Public aliases (may be None — callers must handle missing paths)

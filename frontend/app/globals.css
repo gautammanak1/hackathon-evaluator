@@ -4,71 +4,68 @@
 
 @layer base {
   :root {
+    /* shadcn-compatible HSL tokens (used by ./components/ui/*) — light theme.
+       Background = white (#FFFFFF), foreground = deep navy (#000D3E),
+       primary = brand purple (#5F38FB). */
     --background: 0 0% 100%;
-    --foreground: 0 0% 0%;
+    --foreground: 226 100% 12%;
     --card: 0 0% 100%;
-    --card-foreground: 0 0% 0%;
-    --muted: 0 0% 45%;
-    --muted-foreground: 0 0% 35%;
-    --border: 0 0% 50%;
-    --primary: 0 0% 0%;
+    --card-foreground: 226 100% 12%;
+    --muted: 220 20% 96%;
+    --muted-foreground: 226 25% 45%;
+    --border: 226 30% 90%;
+    --input: 226 30% 90%;
+    --ring: 254 95% 60%;
+    --primary: 254 95% 60%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 0 0% 91%;
-    --secondary-foreground: 0 0% 0%;
-    --destructive: 0 0% 25%;
+    --secondary: 220 20% 96%;
+    --secondary-foreground: 226 100% 12%;
+    --accent: 254 95% 60%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 343 75% 50%;
     --destructive-foreground: 0 0% 100%;
-    --accent: 0 0% 91%;
-    --accent-foreground: 0 0% 0%;
-    --radius: 0.5rem;
+    --radius: 0.6rem;
 
-    --gh-bg: #ffffff;
-    --gh-card: #ffffff;
-    --gh-border: #808080;
-    --gh-muted: #808080;
-    --gh-subtle: #c0c0c0;
-    --gh-lightgray: #e8e8e8;
-    --gh-text: #000000;
-    --gh-green: #000000;
-    --gh-blue: #404040;
-    --gh-red: #404040;
-  }
+    /* App custom palette — Innovation Lab light theme.
+       White surface, deep navy text, brand purple as the only accent. */
+    --gh-bg:        #FFFFFF;
+    --gh-card:      #F7F8FB;
+    --gh-border:    rgba(0, 13, 62, 0.10);
+    --gh-muted:     #5C6489;
+    --gh-subtle:    #9099B5;
+    --gh-lightgray: #F2F4F9;
+    --gh-text:      #000D3E;
+    --gh-green:     #1a7f37;
+    --gh-blue:      #5F38FB;
+    --gh-red:       #cf447b;
 
-  .dark {
-    --background: 0 0% 7%;
-    --foreground: 0 0% 98%;
-    --card: 0 0% 10%;
-    --card-foreground: 0 0% 98%;
-    --muted: 0 0% 55%;
-    --muted-foreground: 0 0% 70%;
-    --border: 0 0% 35%;
-    --primary: 0 0% 98%;
-    --primary-foreground: 0 0% 5%;
-    --secondary: 0 0% 16%;
-    --secondary-foreground: 0 0% 98%;
-    --destructive: 0 0% 75%;
-    --destructive-foreground: 0 0% 8%;
-    --accent: 0 0% 18%;
-    --accent-foreground: 0 0% 98%;
-
-    --gh-bg: #0c0c0c;
-    --gh-card: #141414;
-    --gh-border: #737373;
-    --gh-muted: #a3a3a3;
-    --gh-subtle: #525252;
-    --gh-lightgray: #1f1f1f;
-    --gh-text: #fafafa;
-    --gh-green: #fafafa;
-    --gh-blue: #d4d4d4;
-    --gh-red: #fca5a5;
+    /* Brand purple = the only accent. The "light" variant is the
+       hover-state tint. */
+    --fetchai-purple:        #5F38FB;
+    --fetchai-purple-hover:  #7A58FF;
+    --fetchai-purple-soft:   rgba(95, 56, 251, 0.10);
+    --fetchai-pink:   #cf447b;
+    --fetchai-orange: #f9774b;
+    --fetchai-green:  #1a7f37;
   }
 
   * {
     @apply border-border;
   }
 
+  html,
   body {
-    @apply bg-gh-bg text-gh-text antialiased;
+    background-color: var(--gh-bg);
+    color: var(--gh-text);
+    font-family: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo,
+      Monaco, "Liberation Mono", "Courier New", monospace;
     font-feature-settings: "rlig" 1, "calt" 1;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body {
+    /* Plain white. No gradient washes. */
+    min-height: 100vh;
   }
 
   a:focus-visible,
@@ -77,17 +74,8 @@
   select:focus-visible,
   textarea:focus-visible,
   [role="tab"]:focus-visible {
-    outline: 2px solid #000000;
+    outline: 2px solid var(--fetchai-purple);
     outline-offset: 2px;
-  }
-
-  .dark a:focus-visible,
-  .dark button:focus-visible,
-  .dark input:focus-visible,
-  .dark select:focus-visible,
-  .dark textarea:focus-visible,
-  .dark [role="tab"]:focus-visible {
-    outline-color: #fafafa;
   }
 }
 
@@ -101,30 +89,16 @@
   }
 
   @keyframes terminalDotsSteps {
-    0% {
-      content: ".";
-    }
-    25% {
-      content: "..";
-    }
-    50% {
-      content: "...";
-    }
-    75% {
-      content: "";
-    }
-    100% {
-      content: ".";
-    }
+    0% { content: "."; }
+    25% { content: ".."; }
+    50% { content: "..."; }
+    75% { content: ""; }
+    100% { content: "."; }
   }
 
   @keyframes bar-fill-progress {
-    from {
-      width: 0%;
-    }
-    to {
-      width: var(--target-width, 100%);
-    }
+    from { width: 0%; }
+    to { width: var(--target-width, 100%); }
   }
 
   .animate-bar-fill {
@@ -132,20 +106,36 @@
   }
 
   @keyframes bg-drift {
-    0%,
-    100% {
-      transform: translate(0, 0) rotate(0deg);
-    }
-    33% {
-      transform: translate(2%, -1.5%) rotate(0.8deg);
-    }
-    66% {
-      transform: translate(-1.5%, 1%) rotate(-0.5deg);
-    }
+    0%, 100% { transform: translate(0, 0) rotate(0deg); }
+    33%      { transform: translate(2%, -1.5%) rotate(0.8deg); }
+    66%      { transform: translate(-1.5%, 1%) rotate(-0.5deg); }
   }
 
   .animate-bg-drift {
     animation: bg-drift 28s ease-in-out infinite;
+  }
+
+  /* Single brand button class — solid purple, white text, lighter on hover. */
+  .btn-fetch {
+    background-color: var(--fetchai-purple);
+    color: #FFFFFF;
+  }
+  .btn-fetch:hover {
+    background-color: var(--fetchai-purple-hover);
+  }
+
+  /* Soft purple chip / hover surface. */
+  .bg-fetch-soft {
+    background-color: var(--fetchai-purple-soft);
+  }
+
+  /* Light glow only when explicitly requested. */
+  .fetch-glow {
+    box-shadow: 0 4px 18px rgba(95, 56, 251, 0.18);
+  }
+
+  .fetch-gradient-text {
+    color: var(--gh-text);
   }
 }
 
@@ -154,6 +144,8 @@
   body {
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
+    background: #ffffff !important;
+    color: #000D3E !important;
   }
   .no-print {
     display: none !important;
